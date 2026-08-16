@@ -30,4 +30,4 @@ run *args:
     cargo run -- {{args}}
 
 install:
-    cargo install --path .
+    cargo install --path . --locked
