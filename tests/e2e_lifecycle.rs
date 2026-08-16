@@ -680,7 +680,7 @@ processes:
 }
 
 #[test]
-fn log_directory_tees_stdout_and_stderr_while_preserving_console_output() {
+fn log_directory_combines_stdout_and_stderr_while_preserving_console_output() {
     let config = TempDir::new().unwrap();
     let runtime = TempDir::new_in("/tmp").unwrap();
     let root = TempDir::new().unwrap();
@@ -728,24 +728,69 @@ processes:
             .any(|line| line == b"app | stderr-line"));
     }
 
-    let stdout = fs::read(root.path().join("logs/app.stdout.log")).unwrap();
-    let stderr = fs::read(root.path().join("logs/app.stderr.log")).unwrap();
+    let log = fs::read(root.path().join("logs/app.log")).unwrap();
     assert_eq!(
-        stdout
-            .windows(b"stdout-line".len())
+        log.windows(b"stdout-line".len())
             .filter(|line| *line == b"stdout-line")
             .count(),
         2
     );
     assert_eq!(
-        stderr
-            .windows(b"stderr-line".len())
+        log.windows(b"stderr-line".len())
             .filter(|line| *line == b"stderr-line")
             .count(),
         2
     );
-    assert!(!stdout.windows(6).any(|line| line == b"app | "));
-    assert!(!stderr.windows(6).any(|line| line == b"app | "));
+    assert!(!log.windows(6).any(|line| line == b"app | "));
+    assert!(!root.path().join("logs/app.stdout.log").exists());
+    assert!(!root.path().join("logs/app.stderr.log").exists());
+}
+
+#[test]
+fn console_false_writes_only_the_combined_process_log() {
+    let config = TempDir::new().unwrap();
+    let runtime = TempDir::new_in("/tmp").unwrap();
+    let root = TempDir::new().unwrap();
+    fs::write(
+        config.path().join("quiet.yaml"),
+        format!(
+            r#"
+version: 1
+project:
+  id: quiet
+  path: {}
+processes:
+  app:
+    mode: task
+    console: false
+    log_directory: logs
+    command: |
+      printf 'stdout-line\n'
+      printf 'stderr-line\n' >&2
+"#,
+            root.path().display()
+        ),
+    )
+    .unwrap();
+
+    let output = keep(
+        config.path(),
+        runtime.path(),
+        root.path(),
+        &["start", "--config", "quiet"],
+    );
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!output.stdout.windows(11).any(|line| line == b"stdout-line"));
+    assert!(!output.stderr.windows(11).any(|line| line == b"stderr-line"));
+    let log = fs::read(root.path().join("logs/app.log")).unwrap();
+    assert!(log.windows(11).any(|line| line == b"stdout-line"));
+    assert!(log.windows(11).any(|line| line == b"stderr-line"));
 }
 
 #[test]

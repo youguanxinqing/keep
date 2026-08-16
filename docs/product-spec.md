@@ -146,10 +146,11 @@ and owns the lifetime of all child process groups. On a terminal, process prefix
 receive distinct colors in YAML order and may override the color per process;
 redirected output and `NO_COLOR` remain plain. Child output uses lightweight native
 pseudo-terminals so terminal-aware programs flush normally without a tmux backend.
-A bounded queue serializes process output and can tee a process's original stdout
-and stderr into append-only local files before it writes the prefixed console line.
-The queue is drained before `keep` exits. A second terminal controls the supervisor
-through its Unix socket.
+A bounded queue serializes process output and can tee a process's stdout and stderr,
+in received order, into one append-only local file before it writes the prefixed
+console line. A process may disable its console destination only when a log directory
+is configured; runtime log failures fall back to console output. The queue is drained
+before `keep` exits. A second terminal controls the supervisor through its Unix socket.
 
 Version 1 limitations are intentional:
 

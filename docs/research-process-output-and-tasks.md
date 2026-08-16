@@ -6,8 +6,9 @@
 
 1. `keep` 已经会捕获 stdout/stderr，并以 `<进程名> | <内容>` 输出。实际复现确认
    pipe 会让 Python 等程序默认缓冲；现已决定使用轻量的 output-only native PTY。
-2. `keep` 使用每进程一个可选字段
-   `log_directory`，始终保留终端输出，同时分别追加原始 stdout/stderr 文件。
+2. `keep` 使用每进程一个可选字段 `log_directory`，默认保留终端输出，同时把该进程
+   的 stdout/stderr 按收到的顺序追加到同一个日志文件；`console: false` 可以只保留
+   文件输出。
 3. 一次性命令已经由 `mode: task` 表达。保留这个名字和现有
    `completed_successfully` 依赖条件，不增加 `once` 别名。
 4. 首版继续使用直接进程 backend；启用现有 `nix` 的 PTY 能力，但不引入 tmux、
@@ -103,11 +104,10 @@ dockerize 只有一个主命令，直接继承父进程 stdin/stdout/stderr，�
 
 | 候选 | 示例 | 优点 | 代价 |
 | --- | --- | --- | --- |
-| A. `log_directory` | `log_directory: .keep/logs` | 一个字段；直接满足“指定目录”；自动保留 stdout/stderr 区分 | 首版不能关闭 console，也不能自定义文件名 |
+| A. `log_directory` + `console` | `log_directory: .keep/logs` | 两个正交字段；每进程一个日志文件，默认保留终端 | 不能自定义文件名 |
 | B. `output` 对象 | `output: { console: true, file: .keep/logs/api.log }` | 可选择 console 和文件 | 配置面更大；合并文件需要定义 stdout/stderr 标记与顺序 |
 
-推荐 **A**。当前需求没有要求静默 console 或自定义单文件名，先增加 `output` 对象会
-提前引入不需要的选择。
+采用 **A**。当前需求不需要自定义文件名，先增加 `output` 对象会扩大配置接口。
 
 ### 推荐配置和语义
 
@@ -133,15 +133,15 @@ processes:
 规则：
 
 - 不配置 `log_directory`：只按现有行为输出到前台终端。
-- 配置后：仍输出到前台，同时 tee 到
-  `<directory>/<process>.stdout.log` 和
-  `<directory>/<process>.stderr.log`。
+- 配置后：仍输出到前台，同时把 stdout/stderr 按收到的顺序 tee 到
+  `<directory>/<process>.log`。
+- 配置 `console: false`：不再把该进程的 stdout/stderr 写到终端；为避免静默丢失输出，
+  此时必须配置 `log_directory`；运行中写文件失败则回退到终端。
 - 相对路径从项目根目录解析；目录不存在时递归创建。
-- 文件保存子进程原始字节，不写进程名前缀和 keep 自己的颜色；文件名已经标识进程
-  和标准流。
+- 文件保存子进程原始字节，不写进程名前缀和 keep 自己的颜色；文件名标识进程。
 - 文件采用 append；同一 supervisor 内的进程重启以及下一次 `keep start` 都继续
   追加。无法创建目录或打开文件时，该进程不应静默启动。
-- 首版不支持只写文件、单文件合并、自定义文件名、轮转、压缩、保留期限和远程日志。
+- 首版不支持自定义文件名、轮转、压缩、保留期限和远程日志。
 
 这只是开发期日志 tee，不是完整日志归档系统。需要控制磁盘占用时先使用系统现有的
 logrotate；只有跨平台体验确实不足时，再增加 keep 自己的 rotation。
@@ -205,11 +205,12 @@ Overmind 的 `can-die` 也不应照搬。它允许指定进程退出而不打断
    仍分别进入 `keep` 的 stdout/stderr。
 2. task 快速写多行、非 UTF-8、超长行以及无结尾换行后退出；`keep start` 返回前所有
    输出都已排空。
-3. 配置 `log_directory` 后终端输出仍存在，并生成四个对应的 stdout/stderr 文件；
+3. 配置 `log_directory` 后终端输出仍存在，并为两个进程各生成一个合并日志文件；
    文件内容不含 keep 前缀。
-4. 日志目录自动创建；进程 restart 后追加而非覆盖；不可写路径在启动子进程前明确
+4. 配置 `console: false` 后只生成合并日志文件，终端不出现该进程的 stdout/stderr。
+5. 日志目录自动创建；进程 restart 后追加而非覆盖；不可写路径在启动子进程前明确
    报错。
-5. 成功 task 不停止正在运行的 service；依赖它的 service 只在
+6. 成功 task 不停止正在运行的 service；依赖它的 service 只在
    `completed_successfully` 后启动。
 6. 失败 task 阻止依赖启动并使 `keep start` 失败；全部为成功 task 时命令以 0 退出。
 7. `mode: task` 配 readiness、service 被 `completed_successfully` 依赖，继续在配置

@@ -327,6 +327,8 @@ pub struct ProcessConfig {
     pub color: Option<ProcessColor>,
     #[serde(default)]
     pub log_directory: Option<String>,
+    #[serde(default = "default_true")]
+    pub console: bool,
     #[serde(default)]
     pub depends_on: IndexMap<String, DependencyCondition>,
     #[serde(default)]
@@ -507,6 +509,11 @@ fn validate(config: &ConfigFile) -> Result<(), String> {
         {
             return Err(format!("process '{name}' log_directory is empty"));
         }
+        if !process.console && process.log_directory.is_none() {
+            return Err(format!(
+                "process '{name}' cannot disable console without log_directory"
+            ));
+        }
         if process
             .readiness
             .as_ref()
@@ -678,6 +685,10 @@ fn validate_acyclic(processes: &IndexMap<String, ProcessConfig>) -> Result<(), S
 
 fn default_stop_signal() -> String {
     "TERM".into()
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn default_stop_timeout() -> String {

@@ -109,8 +109,9 @@ keep start
 keep 使用轻量的原生 PTY 保留 Python 等终端感知程序的正常刷新行为，不依赖 tmux。
 终端中的进程名前缀会自动使用不同颜色；重要进程可配置 `color: red`，也可使用
 `0` 到 `255` 的 xterm 色号。重定向输出或设置 `NO_COLOR=1` 时不会输出颜色控制符。
-配置 `log_directory` 后，终端输出保持不变，同时生成 `<进程>.stdout.log` 和
-`<进程>.stderr.log`；相对目录从项目根目录解析，文件采用追加写入。
+配置 `log_directory` 后，终端输出保持不变，同时把该进程的 stdout/stderr 追加到
+同一个 `<进程>.log`；相对目录从项目根目录解析。只想写文件时再配置
+`console: false`。
 
 也可以显式指定配置，或只启动某个进程及其依赖：
 

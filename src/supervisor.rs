@@ -133,13 +133,13 @@ struct OutputLine {
     line: Vec<u8>,
     stderr: bool,
     log_index: Option<usize>,
+    console: bool,
 }
 
 struct ProcessLogs {
     process: String,
-    directory: PathBuf,
-    stdout: Option<File>,
-    stderr: Option<File>,
+    path: PathBuf,
+    file: Option<File>,
 }
 
 impl ManagedProcess {
@@ -449,6 +449,7 @@ impl Supervisor {
             process.name.clone(),
             process.color,
             process.config.log_directory.is_some().then_some(index),
+            process.config.console,
             stdout_reader,
             false,
             output_sender.clone(),
@@ -457,6 +458,7 @@ impl Supervisor {
             process.name.clone(),
             process.color,
             process.config.log_directory.is_some().then_some(index),
+            process.config.console,
             stderr_reader,
             true,
             output_sender,
@@ -1109,6 +1111,7 @@ fn forward_output<R>(
     name: String,
     color: u8,
     log_index: Option<usize>,
+    console: bool,
     reader: R,
     stderr: bool,
     sender: SyncSender<OutputLine>,
@@ -1145,6 +1148,7 @@ fn forward_output<R>(
                     line: std::mem::take(&mut line),
                     stderr,
                     log_index,
+                    console,
                 })
                 .is_err()
                 || done
@@ -1159,12 +1163,13 @@ fn write_output(receiver: Receiver<OutputLine>, mut logs: Vec<Option<ProcessLogs
     let mut stdout_open = true;
     let mut stderr_open = true;
     while let Ok(output) = receiver.recv() {
-        if let Some(process_logs) = output
+        let logged = output
             .log_index
             .and_then(|index| logs.get_mut(index))
             .and_then(Option::as_mut)
-        {
-            append_process_log(process_logs, output.stderr, &output.line);
+            .is_some_and(|process_logs| append_process_log(process_logs, &output.line));
+        if !output.console && logged {
+            continue;
         }
         if output.stderr && stderr_open {
             stderr_open =
@@ -1195,44 +1200,40 @@ fn prepare_process_logs(
         path: directory.clone(),
         source,
     })?;
-    let open = |stream| {
-        let path = directory.join(format!("{name}.{stream}.log"));
-        OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .map_err(|source| SupervisorError::OpenLogFile {
-                process: name.into(),
-                path,
-                source,
-            })
-    };
-    let stdout = open("stdout")?;
-    let stderr = open("stderr")?;
+    let path = directory.join(format!("{name}.log"));
+    let file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|source| SupervisorError::OpenLogFile {
+            process: name.into(),
+            path: path.clone(),
+            source,
+        })?;
     Ok(Some(ProcessLogs {
         process: name.into(),
-        directory,
-        stdout: Some(stdout),
-        stderr: Some(stderr),
+        path,
+        file: Some(file),
     }))
 }
 
-fn append_process_log(logs: &mut ProcessLogs, stderr: bool, line: &[u8]) {
-    let (stream, output) = if stderr {
-        ("stderr", &mut logs.stderr)
-    } else {
-        ("stdout", &mut logs.stdout)
-    };
-    let result = output.as_mut().map(|output| write_raw_line(output, line));
-    if let Some(Err(error)) = result {
-        system_error(format_args!(
-            "cannot append {} for process '{}': {error}; disabling this log file",
-            logs.directory
-                .join(format!("{}.{}.log", logs.process, stream))
-                .display(),
-            logs.process
-        ));
-        *output = None;
+fn append_process_log(logs: &mut ProcessLogs, line: &[u8]) -> bool {
+    let result = logs
+        .file
+        .as_mut()
+        .map(|output| write_raw_line(output, line));
+    match result {
+        Some(Ok(())) => true,
+        Some(Err(error)) => {
+            system_error(format_args!(
+                "cannot append {} for process '{}': {error}; falling back to console",
+                logs.path.display(),
+                logs.process
+            ));
+            logs.file = None;
+            false
+        }
+        None => false,
     }
 }
 
@@ -1367,4 +1368,24 @@ fn system_log(arguments: std::fmt::Arguments<'_>) {
 
 fn system_error(arguments: std::fmt::Arguments<'_>) {
     let _ = writeln!(std::io::stderr().lock(), "system | {arguments}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failed_log_write_disables_the_file_for_console_fallback() {
+        let directory = tempfile::TempDir::new().unwrap();
+        let path = directory.path().join("app.log");
+        fs::write(&path, "existing").unwrap();
+        let mut logs = ProcessLogs {
+            process: "app".into(),
+            path: path.clone(),
+            file: Some(File::open(path).unwrap()),
+        };
+
+        assert!(!append_process_log(&mut logs, b"new line\n"));
+        assert!(logs.file.is_none());
+    }
 }

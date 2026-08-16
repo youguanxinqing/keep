@@ -76,9 +76,11 @@ supervisor. Probe tasks never directly start dependent processes.
 Reads stdout and stderr without blocking the supervisor, preserves emitted ANSI
 bytes, and prefixes complete lines. Prefix colors are assigned once when the
 supervisor is created, with optional per-process overrides; non-terminal output and
-`NO_COLOR` use plain prefixes. The same writer optionally appends unprefixed bytes
-to per-process stdout/stderr files, so no second reader or tailer is required. Reader
-threads send lines through one bounded queue to the writer; shutdown closes the
+`NO_COLOR` use plain prefixes. The same writer optionally appends unprefixed stdout
+and stderr bytes to one file per process, in the order received, so no second reader
+or tailer is required. Reader threads send lines through one bounded queue to the
+writer. Per-process `console: false` skips the console destination while its log is
+writable and falls back to the console after a write failure. Shutdown closes the
 queue and waits until pending output has been written. A slow control client must
 not block child output.
 

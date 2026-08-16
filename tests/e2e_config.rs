@@ -647,6 +647,38 @@ processes:
 }
 
 #[test]
+fn config_validate_rejects_disabled_console_without_a_log_directory() {
+    let config_dir = TempDir::new().unwrap();
+    let working_dir = TempDir::new().unwrap();
+    write_config(
+        config_dir.path(),
+        "quiet.yaml",
+        r#"
+version: 1
+project:
+  id: quiet
+processes:
+  api:
+    command: api
+    console: false
+"#,
+    );
+
+    let output = keep(
+        config_dir.path(),
+        working_dir.path(),
+        &["config", "validate", "--all"],
+    );
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("process 'api' cannot disable console without log_directory"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn config_init_creates_a_valid_minimal_global_template() {
     let workspace = TempDir::new().unwrap();
     let project = workspace.path().join("working-copy");

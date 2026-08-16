@@ -75,6 +75,7 @@ pub fn load_procfile(path: &Path, project_id: Option<&str>) -> Result<LoadedConf
                 mode: ProcessMode::Service,
                 color: None,
                 log_directory: None,
+                console: true,
                 depends_on: IndexMap::new(),
                 readiness: None,
                 restart: None,

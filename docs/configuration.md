@@ -91,6 +91,7 @@ processes:
     mode: service
     color: red
     log_directory: .keep/logs
+    console: true
     working_directory: services/api
     env_files:
       - services/api/.env
@@ -199,7 +200,8 @@ project:
 | `command` | 字符串 | 是 | 无 | 使用 POSIX `sh -c` 执行的非空命令。 |
 | `mode` | 枚举 | 否 | `service` | `service` 是长期服务；`task` 是成功退出的一次性任务。 |
 | `color` | 颜色名或整数 | 否 | 自动分配 | 日志前缀颜色，支持颜色名或 xterm `0..255` 色号。 |
-| `log_directory` | 字符串 | 否 | 无 | 保留终端输出，并把原始 stdout/stderr 追加到该目录。 |
+| `log_directory` | 字符串 | 否 | 无 | 保留终端输出，并把 stdout/stderr 合并追加到该目录。 |
+| `console` | 布尔值 | 否 | `true` | 是否把该进程的 stdout/stderr 同时显示在终端。 |
 | `depends_on` | 对象 | 否 | `{}` | 依赖进程名到依赖条件的映射。 |
 | `readiness` | 对象 | 否 | 无 | 服务的就绪检测；`task` 不能配置此字段。 |
 | `restart` | 对象 | 否 | `defaults.restart` | 该进程的重启设置。字段与 `defaults.restart` 相同。 |
@@ -255,10 +257,23 @@ processes:
     log_directory: .keep/logs
 ```
 
-终端输出不会被关闭；keep 同时追加写入 `.keep/logs/api.stdout.log` 和
-`.keep/logs/api.stderr.log`。相对目录从项目根目录解析，绝对目录保持原样；目录不存在
-时自动创建。文件只保存捕获到的进程原始字节，不包含 `api |` 前缀或 keep 添加的颜色。
-进程重启以及下一次执行 `keep start` 都继续追加，不会覆盖已有内容。
+终端输出不会被关闭；keep 同时把 stdout 和 stderr 按收到的顺序追加写入
+`.keep/logs/api.log`。相对目录从项目根目录解析，绝对目录保持原样；目录不存在时自动
+创建。文件只保存捕获到的进程原始字节，不包含 `api |` 前缀或 keep 添加的颜色。进程
+重启以及下一次执行 `keep start` 都继续追加，不会覆盖已有内容。
+
+只写文件、不在终端显示该进程输出时配置 `console: false`：
+
+```yaml
+processes:
+  api:
+    command: npm run dev
+    log_directory: .keep/logs
+    console: false
+```
+
+`console: false` 不会隐藏 keep 自身的错误；为防止静默丢失进程输出，此时必须同时配置
+`log_directory`。如果运行中日志文件写入失败，keep 会报错并把后续输出回退到终端。
 
 keep 不负责日志轮转、压缩和保留期限；需要限制磁盘占用时使用系统的 logrotate 等
 现有工具。目录无法创建或日志文件无法打开时，keep 会在启动进程前报错。
