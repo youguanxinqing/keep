@@ -89,11 +89,11 @@ pub fn load_procfile(path: &Path, project_id: Option<&str>) -> Result<LoadedConf
     if processes.is_empty() {
         return Err(ProcfileError::Empty(path.to_path_buf()));
     }
-    let env_files = root
-        .join(".env")
-        .is_file()
-        .then(|| vec![".env".into()])
-        .unwrap_or_default();
+    let env_files = if root.join(".env").is_file() {
+        vec![".env".into()]
+    } else {
+        Vec::new()
+    };
     LoadedConfig::from_config(
         path.to_path_buf(),
         ConfigFile {
