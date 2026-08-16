@@ -145,6 +145,8 @@ pub struct ProcessStatus {
     pub state: ProcessState,
     pub detail: Option<String>,
     pub restart_count: u32,
+    #[serde(default)]
+    pub started_at_unix_seconds: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -394,6 +396,7 @@ mod tests {
                     state: ProcessState::Ready,
                     detail: None,
                     restart_count: 0,
+                    started_at_unix_seconds: None,
                 }],
             }),
         };

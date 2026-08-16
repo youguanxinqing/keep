@@ -157,14 +157,14 @@ processes:
             .unwrap()
             .split_whitespace()
             .collect::<Vec<_>>(),
-        ["PROJECT", "PROCESS", "PID", "STATUS", "RESTARTS", "DETAIL", "ROOT"]
+        ["PROJECT", "PROCESS", "PID", "STATUS", "UPTIME", "RESTARTS", "DETAIL", "ROOT"]
     );
     assert!(stdout.lines().any(|line| {
         let fields = line.split_whitespace().collect::<Vec<_>>();
         fields.first() == Some(&"shop")
             && fields.get(1) == Some(&"api")
             && fields.get(3) == Some(&"ready")
-            && fields.get(4) == Some(&"0")
+            && fields.get(5) == Some(&"0")
     }));
 
     let status_all = keep(

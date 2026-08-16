@@ -643,6 +643,7 @@ fn print_statuses(statuses: &[ProjectStatus], process_filter: Option<&str>, deta
             "PROCESS".into(),
             "PID".into(),
             "STATUS".into(),
+            "UPTIME".into(),
             "RESTARTS".into(),
             "DETAIL".into(),
             "ROOT".into(),
@@ -653,9 +654,14 @@ fn print_statuses(statuses: &[ProjectStatus], process_filter: Option<&str>, deta
             "PROCESS".into(),
             "PID".into(),
             "STATUS".into(),
+            "UPTIME".into(),
             "ROOT".into(),
         ]]
     };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
     for project in statuses {
         let root = display_path(&project.root);
         for process in &project.processes {
@@ -665,12 +671,17 @@ fn print_statuses(statuses: &[ProjectStatus], process_filter: Option<&str>, deta
             let pid = process
                 .pid
                 .map_or_else(|| "-".into(), |pid| pid.to_string());
+            let uptime = process.started_at_unix_seconds.map_or_else(
+                || "-".into(),
+                |started| format_uptime(now.saturating_sub(started)),
+            );
             if detailed {
                 rows.push(vec![
                     project.id.clone(),
                     process.name.clone(),
                     pid,
                     process.state.to_string(),
+                    uptime,
                     process.restart_count.to_string(),
                     process.detail.clone().unwrap_or_else(|| "-".into()),
                     root.clone(),
@@ -681,12 +692,30 @@ fn print_statuses(statuses: &[ProjectStatus], process_filter: Option<&str>, deta
                     process.name.clone(),
                     pid,
                     process.state.to_string(),
+                    uptime,
                     root.clone(),
                 ]);
             }
         }
     }
-    print_table(&rows, if detailed { &[2, 4] } else { &[2] });
+    print_table(&rows, if detailed { &[2, 4, 5] } else { &[2, 4] });
+}
+
+fn format_uptime(seconds: u64) -> String {
+    let (days, hours, minutes) = (
+        seconds / 86_400,
+        seconds % 86_400 / 3_600,
+        seconds % 3_600 / 60,
+    );
+    if days > 0 {
+        format!("{days}d{hours}h")
+    } else if hours > 0 {
+        format!("{hours}h{minutes}m")
+    } else if minutes > 0 {
+        format!("{minutes}m{}s", seconds % 60)
+    } else {
+        format!("{seconds}s")
+    }
 }
 
 fn display_path(path: &Path) -> String {

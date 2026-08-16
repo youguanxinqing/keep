@@ -126,6 +126,7 @@ struct ManagedProcess {
     next_restart: Option<Instant>,
     generation: u64,
     probe_cancel: Option<Arc<AtomicBool>>,
+    started_at_unix_seconds: Option<u64>,
 }
 
 struct OutputLine {
@@ -150,6 +151,7 @@ impl ManagedProcess {
             state: self.state,
             detail: self.detail.clone(),
             restart_count: self.restart_count,
+            started_at_unix_seconds: self.pid.and(self.started_at_unix_seconds),
         }
     }
 
@@ -233,6 +235,7 @@ impl Supervisor {
                 next_restart: None,
                 generation: 0,
                 probe_cancel: None,
+                started_at_unix_seconds: None,
             });
         }
 
@@ -466,6 +469,12 @@ impl Supervisor {
         process.pid = Some(pid);
         process.child = Some(child);
         process.next_restart = None;
+        process.started_at_unix_seconds = Some(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        );
         if !self.started_order.contains(&process.name) {
             self.started_order.push(process.name.clone());
         }
