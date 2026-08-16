@@ -26,6 +26,7 @@ interactive PTY attachment feature.
 Native configuration files live in:
 
 ```text
+<git-root>/keep.yaml
 ~/.config/keep/*.yaml
 ~/.config/keep/*.yml
 ```
@@ -40,15 +41,17 @@ project ID. The effective ID is `project.id` when present, otherwise
 `keep start` resolves a configuration using this order:
 
 1. An explicit `--config <id-or-path>` argument.
-2. The current directory contained by `project.path`; the longest matching path
+2. A `keep.yaml` file in the current Git root.
+3. The current directory contained by `project.path`; the longest matching path
    wins.
-3. A normalized Git remote matching an entry in `project.git`.
-4. The Git root or current directory basename matching `project.name` or an
+4. A normalized Git remote matching an entry in `project.git`.
+5. The Git root or current directory basename matching `project.name` or an
    alias.
 
-Ties at the same priority are reported with all candidates. Git URLs are
-normalized so common SSH and HTTPS forms for the same host and repository
-compare equally.
+Steps 3–5 scan the global configuration directory only. An invalid local file
+is reported instead of silently falling back. Ties at the same priority are
+reported with all candidates. Git URLs are normalized so common SSH and HTTPS
+forms for the same host and repository compare equally.
 
 The diagnostic command `keep config resolve` explains which configuration was
 selected and why.

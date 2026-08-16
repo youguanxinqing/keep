@@ -575,15 +575,7 @@ fn run_config_init(repository: &ConfigRepository, args: ConfigInitArgs) -> Resul
     LoadedConfig::load(&target)?;
 
     println!("created {}", target.display());
-    if args.local {
-        println!(
-            "next: edit {}, then run `keep start --config {}`",
-            target.display(),
-            target.display()
-        );
-    } else {
-        println!("next: edit {}, then run `keep start`", target.display());
-    }
+    println!("next: edit {}, then run `keep start`", target.display());
     Ok(())
 }
 

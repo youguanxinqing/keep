@@ -18,7 +18,8 @@ keep --version
 
 ## 配置
 
-配置文件放在 `~/.config/keep/`，一个项目对应一个 `.yaml` 文件。例如 `~/.config/keep/shop.yaml`：
+配置既可以放在项目 Git 根目录的 `keep.yaml`，也可以放在
+`~/.config/keep/*.yaml`。自动识别时优先使用本地 `keep.yaml`，没有时再匹配全局配置。
 
 在项目目录中生成最小模板：
 
@@ -30,6 +31,8 @@ keep config init --project shop     # 显式指定项目名称
 
 命令会优先记录 Git remote，没有 remote 时记录本地路径，并且不会覆盖已有文件。
 生成后只需修改 `processes.app.command`。
+
+显式传入 `--config` 时以指定配置为准；否则查找顺序为本地 `keep.yaml`、全局配置。
 
 ```yaml
 version: 1
@@ -86,7 +89,8 @@ processes:
 先检查配置：
 
 ```bash
-keep config validate --all
+keep config validate          # 检查当前项目选中的配置
+keep config validate --all    # 检查全部全局配置
 keep config resolve            # 查看当前目录会匹配哪个项目
 ```
 

@@ -70,6 +70,7 @@ Required scenarios include:
 - forward graceful signals, then force-kill a process that ignores them;
 - reject duplicate IDs, dependency cycles, unknown fields, and ambiguous
   project matches;
+- prefer repository-local `keep.yaml` over a matching global configuration;
 - generate valid minimal global and repository-local configurations without
   overwriting existing files;
 - run and convert a Procfile only through explicit compatibility commands;

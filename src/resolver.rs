@@ -54,6 +54,18 @@ pub fn resolve_current(
         .canonicalize()
         .unwrap_or_else(|_| current_directory.to_path_buf());
     let git = inspect_git(&current_directory);
+    let project_root = git
+        .root
+        .clone()
+        .unwrap_or_else(|| current_directory.clone());
+    let local_config = project_root.join("keep.yaml");
+    if local_config.is_file() {
+        return Ok(Resolution {
+            config: LoadedConfig::load(&local_config)?,
+            reason: "repository-local keep.yaml".into(),
+            project_root,
+        });
+    }
     let mut candidates = Vec::new();
 
     for config in repository.load_all()? {

@@ -337,6 +337,62 @@ processes:
 }
 
 #[test]
+fn start_prefers_repository_local_config_over_a_matching_global_config() {
+    let config_dir = TempDir::new().unwrap();
+    let runtime_dir = runtime_temp_dir();
+    let workspace = TempDir::new().unwrap();
+    let repository = workspace.path().join("shop");
+    let nested = repository.join("services/api");
+    fs::create_dir_all(&nested).unwrap();
+    assert!(Command::new("git")
+        .args(["init", "--quiet"])
+        .current_dir(&repository)
+        .status()
+        .unwrap()
+        .success());
+    fs::write(
+        repository.join("keep.yaml"),
+        r#"
+version: 1
+project:
+  name: local
+processes:
+  selected:
+    mode: task
+    command: touch local-started
+"#,
+    )
+    .unwrap();
+    fs::write(
+        config_dir.path().join("global.yaml"),
+        format!(
+            r#"
+version: 1
+project:
+  name: global
+  path: {}
+processes:
+  selected:
+    mode: task
+    command: touch global-started
+"#,
+            repository.display()
+        ),
+    )
+    .unwrap();
+
+    let output = keep(config_dir.path(), runtime_dir.path(), &nested, &["start"]);
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(repository.join("local-started").is_file());
+    assert!(!repository.join("global-started").exists());
+}
+
+#[test]
 fn restarting_a_dependency_preserves_reverse_dependency_shutdown_order() {
     let config_dir = TempDir::new().unwrap();
     let runtime_dir = runtime_temp_dir();

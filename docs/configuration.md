@@ -1,12 +1,14 @@
 # keep 配置参考
 
-原生配置文件放在 `~/.config/keep/*.yaml` 或 `~/.config/keep/*.yml`。一个文件描述
-一个项目；也可以用 `KEEP_CONFIG_DIR` 改变配置目录。
+原生配置可以放在 Git 根目录的 `keep.yaml`，也可以放在
+`~/.config/keep/*.yaml` 或 `~/.config/keep/*.yml`。全局目录中的一个文件描述一个项目；
+也可以用 `KEEP_CONFIG_DIR` 改变全局配置目录。
 
 修改后先检查配置：
 
 ```bash
-keep config validate --all
+keep config validate
+keep config validate --all  # 仅检查全局目录中的全部配置
 keep config resolve
 ```
 
@@ -21,9 +23,8 @@ keep config init --local
 ```
 
 默认写入 `~/.config/keep/<项目名称>.yaml`。`--local` 改为在当前 Git 根目录写入
-`keep.yaml`，启动时使用提示中的 `keep start --config <文件>`。项目名称默认取 Git
-根目录或当前目录名称，也可以用 `--project` 指定；没有显式 `id` 时，该名称同时作为
-运行时 ID。
+`keep.yaml`，之后直接运行 `keep start`。项目名称默认取 Git 根目录或当前目录名称，
+也可以用 `--project` 指定；没有显式 `id` 时，该名称同时作为运行时 ID。
 
 生成器优先写入规范化且不含凭据的 Git remote，便于同一配置跨 worktree 使用；
 没有 remote 时写入当前项目的绝对 `path`。目标文件存在时会拒绝覆盖。
@@ -142,8 +143,9 @@ processes:
 同一配置目录内不能出现重复的有效 ID。只有 `name` 时，修改名称等同于修改项目身份；
 需要独立的友好展示名称时应同时配置稳定 `id`。
 
-自动匹配顺序为：`--config` 显式指定、`project.path`、`project.git`，最后是
-`id`、`name` 或 `aliases` 与目录名匹配。同一级出现多个候选时会报错，不会猜测。
+配置选择顺序为：`--config` 显式指定、Git 根目录的 `keep.yaml`，最后才扫描全局目录，
+依次匹配 `project.path`、`project.git`、`id`、`name` 或 `aliases`。本地配置存在但无效时
+会直接报错，不会静默回退。同一级出现多个全局候选时会报错，不会猜测。
 
 ### Git worktree
 

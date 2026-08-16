@@ -483,6 +483,52 @@ processes:
 }
 
 #[test]
+fn config_resolve_uses_repository_local_config_without_a_global_directory() {
+    let workspace = TempDir::new().unwrap();
+    let repository = workspace.path().join("shop");
+    let nested = repository.join("services/api");
+    let missing_config_dir = workspace.path().join("missing-global-config");
+    fs::create_dir_all(&nested).unwrap();
+    assert!(Command::new("git")
+        .args(["init", "--quiet"])
+        .current_dir(&repository)
+        .status()
+        .unwrap()
+        .success());
+    write_config(
+        &repository,
+        "keep.yaml",
+        r#"
+version: 1
+project:
+  name: shop
+processes:
+  app:
+    command: run-app
+"#,
+    );
+
+    let output = keep(&missing_config_dir, &nested, &["config", "resolve"]);
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains(&format!(
+        "selected: {}",
+        repository
+            .canonicalize()
+            .unwrap()
+            .join("keep.yaml")
+            .display()
+    )));
+    assert!(stdout.contains("project: shop"));
+    assert!(stdout.contains("reason: repository-local keep.yaml"));
+}
+
+#[test]
 fn config_validate_all_rejects_duplicate_project_ids() {
     let config_dir = TempDir::new().unwrap();
     let working_dir = TempDir::new().unwrap();
@@ -616,10 +662,11 @@ fn config_init_local_uses_git_root_remote_and_refuses_overwrite() {
 
     let target = repository.join("keep.yaml");
     assert!(
-        String::from_utf8_lossy(&output.stdout).contains("keep start --config"),
+        String::from_utf8_lossy(&output.stdout).contains("then run `keep start`"),
         "{}",
         String::from_utf8_lossy(&output.stdout)
     );
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("--config"));
     let contents = fs::read_to_string(&target).unwrap();
     assert!(contents.contains("  name: shop\n"), "{contents}");
     assert!(!contents.contains("  id:"), "{contents}");
