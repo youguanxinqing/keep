@@ -657,6 +657,7 @@ fn print_statuses(statuses: &[ProjectStatus], process_filter: Option<&str>, deta
         ]]
     };
     for project in statuses {
+        let root = display_path(&project.root);
         for process in &project.processes {
             if process_filter.is_some_and(|filter| filter != process.name) {
                 continue;
@@ -672,7 +673,7 @@ fn print_statuses(statuses: &[ProjectStatus], process_filter: Option<&str>, deta
                     process.state.to_string(),
                     process.restart_count.to_string(),
                     process.detail.clone().unwrap_or_else(|| "-".into()),
-                    project.root.display().to_string(),
+                    root.clone(),
                 ]);
             } else {
                 rows.push(vec![
@@ -680,12 +681,25 @@ fn print_statuses(statuses: &[ProjectStatus], process_filter: Option<&str>, deta
                     process.name.clone(),
                     pid,
                     process.state.to_string(),
-                    project.root.display().to_string(),
+                    root.clone(),
                 ]);
             }
         }
     }
     print_table(&rows, if detailed { &[2, 4] } else { &[2] });
+}
+
+fn display_path(path: &Path) -> String {
+    std::env::var_os("HOME")
+        .and_then(|home| path.strip_prefix(PathBuf::from(home)).ok())
+        .map(|relative| {
+            if relative.as_os_str().is_empty() {
+                "~".into()
+            } else {
+                format!("~/{}", relative.display())
+            }
+        })
+        .unwrap_or_else(|| path.display().to_string())
 }
 
 fn print_table(rows: &[Vec<String>], right_aligned: &[usize]) {

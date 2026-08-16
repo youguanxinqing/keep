@@ -246,6 +246,53 @@ fn start_honors_no_color_in_a_terminal() {
 }
 
 #[test]
+fn ls_abbreviates_project_roots_under_home() {
+    let workspace = TempDir::new().expect("workspace");
+    let home = workspace.path().join("home");
+    fs::create_dir_all(&home).expect("home directory");
+    let home = home.canonicalize().expect("canonical home directory");
+    let project_root = home.join("projects/demo");
+    fs::create_dir_all(&project_root).expect("project root");
+    let config_dir = TempDir::new().expect("configuration directory");
+    let runtime_dir = runtime_temp_dir();
+    let unrelated = TempDir::new().expect("unrelated directory");
+    write_service_config(
+        config_dir.path(),
+        &project_root,
+        "home-root",
+        &format!("  app:\n{LONG_RUNNING_PROCESS}"),
+    );
+    let supervisor = spawn_keep(
+        "home-root",
+        config_dir.path(),
+        runtime_dir.path(),
+        unrelated.path(),
+        unrelated.path(),
+    );
+    assert!(
+        wait_for(Duration::from_secs(5), || supervisor
+            .logs()
+            .contains("app | online")),
+        "{}",
+        supervisor.logs()
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_keep"))
+        .args(["ls", "home-root"])
+        .env("KEEP_CONFIG_DIR", config_dir.path())
+        .env("KEEP_RUNTIME_DIR", runtime_dir.path())
+        .env("HOME", &home)
+        .current_dir(unrelated.path())
+        .output()
+        .expect("keep ls");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(output.status.success(), "{stdout}");
+    assert!(stdout.contains("~/projects/demo"), "{stdout}");
+    assert!(!stdout.contains(&home.to_string_lossy()[..]), "{stdout}");
+}
+
+#[test]
 fn start_runs_dependencies_and_global_ls_and_stop_work_from_another_directory() {
     let config_dir = TempDir::new().expect("configuration directory");
     let runtime_dir = runtime_temp_dir();
