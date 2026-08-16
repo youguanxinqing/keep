@@ -133,6 +133,8 @@ keep stop shop                # 停止整个项目
 keep stop --all               # 停止 keep 管理的所有项目
 ```
 
+常用命令有短别名：`s`（start）、`l`（ls）、`ps`（status）、`st`（stop）、`r`（restart）、`q`（quit）。
+
 ## Procfile 兼容模式
 
 Procfile 不参与自动匹配，需要显式运行：

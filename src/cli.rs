@@ -73,16 +73,22 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Start and supervise a project, or start stopped processes in a running project.
+    #[command(visible_alias = "s")]
     Start(StartArgs),
     /// List processes from every running keep project.
+    #[command(visible_alias = "l")]
     Ls(ListArgs),
     /// Show detailed runtime status.
+    #[command(visible_alias = "ps")]
     Status(StatusArgs),
     /// Stop running projects or processes.
+    #[command(visible_alias = "st")]
     Stop(StopArgs),
     /// Restart running projects or processes.
+    #[command(visible_alias = "r")]
     Restart(RestartArgs),
     /// Gracefully shut down one project's supervisor.
+    #[command(visible_alias = "q")]
     Quit(QuitArgs),
     /// Create, inspect, and validate keep configuration files.
     Config(ConfigArgs),
