@@ -680,6 +680,118 @@ processes:
 }
 
 #[test]
+fn log_directory_tees_stdout_and_stderr_while_preserving_console_output() {
+    let config = TempDir::new().unwrap();
+    let runtime = TempDir::new_in("/tmp").unwrap();
+    let root = TempDir::new().unwrap();
+    fs::write(
+        config.path().join("tee.yaml"),
+        format!(
+            r#"
+version: 1
+project:
+  id: tee
+  path: {}
+processes:
+  app:
+    mode: task
+    log_directory: logs
+    command: |
+      printf 'stdout-line\n'
+      printf 'stderr-line\n' >&2
+"#,
+            root.path().display()
+        ),
+    )
+    .unwrap();
+
+    for _ in 0..2 {
+        let output = keep(
+            config.path(),
+            runtime.path(),
+            root.path(),
+            &["start", "--config", "tee"],
+        );
+        assert!(
+            output.status.success(),
+            "stdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output
+            .stdout
+            .windows(b"app | stdout-line".len())
+            .any(|line| line == b"app | stdout-line"));
+        assert!(output
+            .stderr
+            .windows(b"app | stderr-line".len())
+            .any(|line| line == b"app | stderr-line"));
+    }
+
+    let stdout = fs::read(root.path().join("logs/app.stdout.log")).unwrap();
+    let stderr = fs::read(root.path().join("logs/app.stderr.log")).unwrap();
+    assert_eq!(
+        stdout
+            .windows(b"stdout-line".len())
+            .filter(|line| *line == b"stdout-line")
+            .count(),
+        2
+    );
+    assert_eq!(
+        stderr
+            .windows(b"stderr-line".len())
+            .filter(|line| *line == b"stderr-line")
+            .count(),
+        2
+    );
+    assert!(!stdout.windows(6).any(|line| line == b"app | "));
+    assert!(!stderr.windows(6).any(|line| line == b"app | "));
+}
+
+#[test]
+fn an_unusable_log_directory_prevents_the_process_from_starting() {
+    let config = TempDir::new().unwrap();
+    let runtime = TempDir::new_in("/tmp").unwrap();
+    let root = TempDir::new().unwrap();
+    let marker = root.path().join("started");
+    fs::write(root.path().join("not-directory"), "not a directory").unwrap();
+    fs::write(
+        config.path().join("blocked.yaml"),
+        format!(
+            r#"
+version: 1
+project:
+  id: blocked
+  path: {}
+processes:
+  app:
+    mode: task
+    log_directory: not-directory/logs
+    command: "touch '{}'"
+"#,
+            root.path().display(),
+            marker.display()
+        ),
+    )
+    .unwrap();
+
+    let output = keep(
+        config.path(),
+        runtime.path(),
+        root.path(),
+        &["start", "--config", "blocked"],
+    );
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("cannot prepare log directory"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!marker.exists(), "process started before logs were ready");
+}
+
+#[test]
 fn short_task_drains_all_output_before_keep_exits() {
     let config = TempDir::new().unwrap();
     let runtime = TempDir::new_in("/tmp").unwrap();

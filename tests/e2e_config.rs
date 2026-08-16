@@ -616,6 +616,37 @@ processes:
 }
 
 #[test]
+fn config_validate_rejects_an_empty_log_directory() {
+    let config_dir = TempDir::new().unwrap();
+    let working_dir = TempDir::new().unwrap();
+    write_config(
+        config_dir.path(),
+        "logs.yaml",
+        r#"
+version: 1
+project:
+  id: logs
+processes:
+  api:
+    command: api
+    log_directory: ""
+"#,
+    );
+
+    let output = keep(
+        config_dir.path(),
+        working_dir.path(),
+        &["config", "validate", "--all"],
+    );
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("process 'api' log_directory is empty"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn config_init_creates_a_valid_minimal_global_template() {
     let workspace = TempDir::new().unwrap();
     let project = workspace.path().join("working-copy");

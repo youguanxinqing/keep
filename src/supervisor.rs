@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::IsTerminal;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::fs::PermissionsExt;
@@ -77,6 +77,20 @@ pub enum SupervisorError {
         source: std::io::Error,
     },
 
+    #[error("cannot prepare log directory {path} for process '{process}': {source}")]
+    PrepareLogDirectory {
+        process: String,
+        path: PathBuf,
+        source: std::io::Error,
+    },
+
+    #[error("cannot open log file {path} for process '{process}': {source}")]
+    OpenLogFile {
+        process: String,
+        path: PathBuf,
+        source: std::io::Error,
+    },
+
     #[error("process '{process}' exited unexpectedly with {status}")]
     UnexpectedExit { process: String, status: String },
 
@@ -118,6 +132,14 @@ struct OutputLine {
     prefix: Arc<[u8]>,
     line: Vec<u8>,
     stderr: bool,
+    log_index: Option<usize>,
+}
+
+struct ProcessLogs {
+    process: String,
+    directory: PathBuf,
+    stdout: Option<File>,
+    stderr: Option<File>,
 }
 
 impl ManagedProcess {
@@ -179,6 +201,7 @@ impl Supervisor {
         };
         let mut automatic_color = 0;
         let mut processes = Vec::with_capacity(config.processes.len());
+        let mut process_logs = Vec::with_capacity(config.processes.len());
         for (name, process) in &config.processes {
             let is_enabled = enabled.contains(name);
             let environment =
@@ -191,6 +214,7 @@ impl Supervisor {
                     automatic_color += 1;
                     color
                 });
+            process_logs.push(prepare_process_logs(&root, name, process)?);
             processes.push(ManagedProcess {
                 name: name.clone(),
                 config: process.clone(),
@@ -226,7 +250,7 @@ impl Supervisor {
         }
         let (probe_sender, probe_receiver) = mpsc::channel();
         let (output_sender, output_receiver) = mpsc::sync_channel(OUTPUT_QUEUE_CAPACITY);
-        let output_writer = thread::spawn(move || write_output(output_receiver));
+        let output_writer = thread::spawn(move || write_output(output_receiver, process_logs));
 
         Ok(Self {
             config,
@@ -424,6 +448,7 @@ impl Supervisor {
         forward_output(
             process.name.clone(),
             process.color,
+            process.config.log_directory.is_some().then_some(index),
             stdout_reader,
             false,
             output_sender.clone(),
@@ -431,6 +456,7 @@ impl Supervisor {
         forward_output(
             process.name.clone(),
             process.color,
+            process.config.log_directory.is_some().then_some(index),
             stderr_reader,
             true,
             output_sender,
@@ -1082,6 +1108,7 @@ fn register_instance(
 fn forward_output<R>(
     name: String,
     color: u8,
+    log_index: Option<usize>,
     reader: R,
     stderr: bool,
     sender: SyncSender<OutputLine>,
@@ -1117,6 +1144,7 @@ fn forward_output<R>(
                     prefix: Arc::clone(&prefix),
                     line: std::mem::take(&mut line),
                     stderr,
+                    log_index,
                 })
                 .is_err()
                 || done
@@ -1127,16 +1155,84 @@ fn forward_output<R>(
     });
 }
 
-fn write_output(receiver: Receiver<OutputLine>) {
+fn write_output(receiver: Receiver<OutputLine>, mut logs: Vec<Option<ProcessLogs>>) {
+    let mut stdout_open = true;
+    let mut stderr_open = true;
     while let Ok(output) = receiver.recv() {
-        let result = if output.stderr {
-            write_prefixed_line(std::io::stderr().lock(), &output.prefix, &output.line)
-        } else {
-            write_prefixed_line(std::io::stdout().lock(), &output.prefix, &output.line)
-        };
-        if result.is_err() {
-            break;
+        if let Some(process_logs) = output
+            .log_index
+            .and_then(|index| logs.get_mut(index))
+            .and_then(Option::as_mut)
+        {
+            append_process_log(process_logs, output.stderr, &output.line);
         }
+        if output.stderr && stderr_open {
+            stderr_open =
+                write_prefixed_line(std::io::stderr().lock(), &output.prefix, &output.line).is_ok();
+        } else if !output.stderr && stdout_open {
+            stdout_open =
+                write_prefixed_line(std::io::stdout().lock(), &output.prefix, &output.line).is_ok();
+        }
+    }
+}
+
+fn prepare_process_logs(
+    root: &Path,
+    name: &str,
+    config: &ProcessConfig,
+) -> Result<Option<ProcessLogs>, SupervisorError> {
+    let Some(directory) = config.log_directory.as_deref() else {
+        return Ok(None);
+    };
+    let directory = PathBuf::from(directory);
+    let directory = if directory.is_absolute() {
+        directory
+    } else {
+        root.join(directory)
+    };
+    fs::create_dir_all(&directory).map_err(|source| SupervisorError::PrepareLogDirectory {
+        process: name.into(),
+        path: directory.clone(),
+        source,
+    })?;
+    let open = |stream| {
+        let path = directory.join(format!("{name}.{stream}.log"));
+        OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .map_err(|source| SupervisorError::OpenLogFile {
+                process: name.into(),
+                path,
+                source,
+            })
+    };
+    let stdout = open("stdout")?;
+    let stderr = open("stderr")?;
+    Ok(Some(ProcessLogs {
+        process: name.into(),
+        directory,
+        stdout: Some(stdout),
+        stderr: Some(stderr),
+    }))
+}
+
+fn append_process_log(logs: &mut ProcessLogs, stderr: bool, line: &[u8]) {
+    let (stream, output) = if stderr {
+        ("stderr", &mut logs.stderr)
+    } else {
+        ("stdout", &mut logs.stdout)
+    };
+    let result = output.as_mut().map(|output| write_raw_line(output, line));
+    if let Some(Err(error)) = result {
+        system_error(format_args!(
+            "cannot append {} for process '{}': {error}; disabling this log file",
+            logs.directory
+                .join(format!("{}.{}.log", logs.process, stream))
+                .display(),
+            logs.process
+        ));
+        *output = None;
     }
 }
 
@@ -1153,6 +1249,10 @@ fn terminal_stream() -> std::io::Result<(Stdio, File)> {
 
 fn write_prefixed_line(mut output: impl Write, prefix: &[u8], line: &[u8]) -> std::io::Result<()> {
     output.write_all(prefix)?;
+    write_raw_line(output, line)
+}
+
+fn write_raw_line(mut output: impl Write, line: &[u8]) -> std::io::Result<()> {
     output.write_all(line)?;
     if !line.ends_with(b"\n") {
         output.write_all(b"\n")?;

@@ -326,6 +326,8 @@ pub struct ProcessConfig {
     #[serde(default)]
     pub color: Option<ProcessColor>,
     #[serde(default)]
+    pub log_directory: Option<String>,
+    #[serde(default)]
     pub depends_on: IndexMap<String, DependencyCondition>,
     #[serde(default)]
     pub readiness: Option<ReadinessConfig>,
@@ -497,6 +499,13 @@ fn validate(config: &ConfigFile) -> Result<(), String> {
         validate_identifier("process name", name)?;
         if process.command.trim().is_empty() {
             return Err(format!("process '{name}' has an empty command"));
+        }
+        if process
+            .log_directory
+            .as_deref()
+            .is_some_and(|directory| directory.trim().is_empty())
+        {
+            return Err(format!("process '{name}' log_directory is empty"));
         }
         if process
             .readiness

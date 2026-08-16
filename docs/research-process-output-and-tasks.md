@@ -6,7 +6,7 @@
 
 1. `keep` 已经会捕获 stdout/stderr，并以 `<进程名> | <内容>` 输出。实际复现确认
    pipe 会让 Python 等程序默认缓冲；现已决定使用轻量的 output-only native PTY。
-2. `keep` 目前没有日志落盘。建议只增加每进程一个可选字段
+2. `keep` 使用每进程一个可选字段
    `log_directory`，始终保留终端输出，同时分别追加原始 stdout/stderr 文件。
 3. 一次性命令已经由 `mode: task` 表达。保留这个名字和现有
    `completed_successfully` 依赖条件，不增加 `once` 别名。
@@ -92,11 +92,10 @@ dockerize 只有一个主命令，直接继承父进程 stdin/stdout/stderr，�
 
 ## 2. 日志落盘
 
-### 当前行为与缺口
+### 当前行为
 
-配置的 `ProcessConfig` 没有输出或日志字段，而且开启了 unknown-field 拒绝；当前产品
-规格也把 persistent log archive 列为 v1 非目标。所以现在无法在 YAML 中合法配置
-日志目录。
+配置的 `ProcessConfig` 支持 `log_directory`。日志 tee 复用统一输出 writer，不引入
+额外 tailer；轮转、压缩、保留期限和远程日志仍不属于 v1。
 
 来源：`../src/config.rs:320-340`、`:394-459`，`../docs/product-spec.md:146-154`。
 
@@ -194,8 +193,8 @@ Overmind 的 `can-die` 也不应照搬。它允许指定进程退出而不打断
 
 1. [已完成] 把输出 reader 纳入 supervisor 生命周期：有界队列、单 writer、EOF
    排空，并补短 task 尾部输出回归测试。
-2. 在同一个输出 writer 增加 `log_directory` tee，不另建 tailer 或日志服务。
-3. 更新 README/configuration：说明默认终端输出、日志文件名，以及 `mode: task`。
+2. [已完成] 在同一个输出 writer 增加 `log_directory` tee，不另建 tailer 或日志服务。
+3. [已完成] 更新 README/configuration：说明默认终端输出、日志文件名，以及 `mode: task`。
 4. 不改 task 状态机；只补缺失的用户文档和必要回归测试。
 
 ## 端到端测试清单
