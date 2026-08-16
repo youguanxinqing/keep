@@ -487,3 +487,113 @@ processes:
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("unknown field `unknown`"));
 }
+
+#[test]
+fn config_init_creates_a_valid_minimal_global_template() {
+    let workspace = TempDir::new().unwrap();
+    let project = workspace.path().join("working-copy");
+    let config_dir = workspace.path().join("config");
+    fs::create_dir(&project).unwrap();
+
+    let output = keep(
+        &config_dir,
+        &project,
+        &["config", "init", "--project", "shop"],
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let target = config_dir.join("shop.yaml");
+    let contents = fs::read_to_string(&target).unwrap();
+    assert!(contents.contains("version: 1\n"), "{contents}");
+    assert!(contents.contains("  id: shop\n"), "{contents}");
+    assert!(
+        contents.contains(&format!(
+            "  path: {}\n",
+            serde_json::to_string(&project.canonicalize().unwrap().to_string_lossy()).unwrap()
+        )),
+        "{contents}"
+    );
+    assert!(contents.contains("  app:\n    command:"), "{contents}");
+    assert!(!contents.contains("defaults:"), "{contents}");
+    assert!(!contents.contains("readiness:"), "{contents}");
+
+    let validate = keep(
+        &config_dir,
+        &project,
+        &["config", "validate", "--config", target.to_str().unwrap()],
+    );
+    assert!(
+        validate.status.success(),
+        "{}",
+        String::from_utf8_lossy(&validate.stderr)
+    );
+}
+
+#[test]
+fn config_init_local_uses_git_root_remote_and_refuses_overwrite() {
+    let workspace = TempDir::new().unwrap();
+    let repository = workspace.path().join("shop");
+    let nested = repository.join("services/api");
+    let config_dir = TempDir::new().unwrap();
+    fs::create_dir_all(&nested).unwrap();
+    assert!(Command::new("git")
+        .args(["init", "--quiet"])
+        .current_dir(&repository)
+        .status()
+        .unwrap()
+        .success());
+    assert!(Command::new("git")
+        .args([
+            "remote",
+            "add",
+            "origin",
+            "https://developer:secret@github.com/acme/shop.git",
+        ])
+        .current_dir(&repository)
+        .status()
+        .unwrap()
+        .success());
+
+    let output = keep(config_dir.path(), &nested, &["config", "init", "--local"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let target = repository.join("keep.yaml");
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("keep start --config"),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let contents = fs::read_to_string(&target).unwrap();
+    assert!(contents.contains("  id: shop\n"), "{contents}");
+    assert!(
+        contents.contains("    - \"github.com/acme/shop\"\n"),
+        "{contents}"
+    );
+    assert!(!contents.contains("secret"), "{contents}");
+    assert!(!contents.contains("  path:"), "{contents}");
+    assert!(!nested.join("keep.yaml").exists());
+
+    let validate = keep(
+        config_dir.path(),
+        &nested,
+        &["config", "validate", "--config", target.to_str().unwrap()],
+    );
+    assert!(validate.status.success());
+
+    let second = keep(config_dir.path(), &nested, &["config", "init", "--local"]);
+    assert!(!second.status.success());
+    assert!(
+        String::from_utf8_lossy(&second.stderr).contains("configuration already exists"),
+        "{}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    assert_eq!(fs::read_to_string(target).unwrap(), contents);
+}

@@ -13,6 +13,7 @@
 - [x] Version 1 strict YAML parser and validated runtime model
 - [x] Strict unknown-field validation
 - [x] Configuration list/show/validate commands
+- [x] Minimal global and repository-local configuration generation
 - [x] Path, project name, alias, and Git remote resolution
 - [x] Explainable matching and ambiguity diagnostics
 - [x] Dependency reference and cycle validation

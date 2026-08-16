@@ -1,29 +1,131 @@
 # keep
 
-`keep` is a project-aware process supervisor for local development.
+`keep` 是一个面向本地开发的轻量进程管理工具。它可以按依赖顺序启动多个进程，等待服务真正可用，并允许你从任意目录查看或停止它们。
 
-It is a single binary: the foreground supervisor is built into `keep`, with no
-daemon, tmux, OpenSSL, or external process-manager dependency.
+`keep` 是单个前台程序，不依赖 daemon、tmux、Overmind、OpenSSL 或其他进程管理器。目前支持 macOS 和 Linux。
 
-The product specification and implementation roadmap live in [docs](docs/README.md).
+## 安装
 
-Native configurations live in `~/.config/keep/*.yaml`. From a configured
-project, start the foreground supervisor with:
+需要 Rust 1.85+ 和 [just](https://github.com/casey/just)。克隆仓库并进入目录后运行：
 
 ```bash
+cd keep
+just install
+keep --version
+```
+
+开发时可运行 `just check` 完成格式、静态检查和全部测试。
+
+## 配置
+
+配置文件放在 `~/.config/keep/`，一个项目对应一个 `.yaml` 文件。例如 `~/.config/keep/shop.yaml`：
+
+在项目目录中生成最小模板：
+
+```bash
+keep config init                    # 写入 ~/.config/keep/<项目 ID>.yaml
+keep config init --local            # 写入当前 Git 根目录的 keep.yaml
+keep config init --project shop     # 显式指定项目 ID
+```
+
+命令会优先记录 Git remote，没有 remote 时记录本地路径，并且不会覆盖已有文件。
+生成后只需修改 `processes.app.command`。
+
+```yaml
+version: 1
+
+project:
+  id: shop                    # 全局唯一，命令中用它指定项目
+  name: Shop
+  git:                        # 推荐：同一配置可用于不同 Git worktree
+    - git@github.com:acme/shop.git
+
+env_files:
+  - .env
+
+processes:
+  database:
+    command: docker compose up postgres
+    readiness:
+      type: tcp
+      target: 127.0.0.1:5432
+      interval: 500ms
+      attempt_timeout: 1s
+      startup_timeout: 30s
+
+  migrate:
+    command: ./scripts/migrate.sh
+    mode: task
+    depends_on:
+      database: ready
+
+  api:
+    command: npm run dev
+    depends_on:
+      database: ready
+      migrate: completed_successfully
+    readiness:
+      type: http
+      target: http://127.0.0.1:3000/health
+      expected_status: 200
+      startup_timeout: 30s
+    restart:
+      policy: on-failure
+      max_attempts: 3
+```
+
+这个配置表示：
+
+1. 启动 `database`，等 TCP 端口可连接。
+2. 运行一次 `migrate`，等它成功退出。
+3. 启动 `api`，等健康检查返回 HTTP 200。
+
+普通进程默认是长期运行的 `service`；`mode: task` 表示执行成功后正常退出的一次性任务。`readiness` 还支持 `tcp4`、`tcp6`、`https`、`unix`、`file` 和 `command`。
+
+全部字段、默认值和约束见 [配置参数参考](docs/configuration.md)。
+
+先检查配置：
+
+```bash
+keep config validate --all
+keep config resolve            # 查看当前目录会匹配哪个项目
+```
+
+## 使用
+
+在项目目录启动全部进程。`keep start` 会留在前台并汇总日志，按 `Ctrl-C` 可停止整个项目：
+
+```bash
+cd ~/projects/shop
 keep start
 ```
 
-Running projects can then be controlled from any directory:
+也可以显式指定配置，或只启动某个进程及其依赖：
 
 ```bash
-keep ls
-keep status shop/api
-keep restart shop/api
-keep stop shop
+keep start --config shop
+keep start api
 ```
 
+在另一个终端、任意目录管理运行中的项目：
+
 ```bash
-just check
-cargo run -- config validate --all
+keep ls                       # 查看所有项目和进程
+keep status shop              # 查看项目详情
+keep status shop/api          # 查看一个进程
+keep restart shop/api         # 重启一个进程
+keep stop shop/api            # 停止一个进程
+keep stop shop                # 停止整个项目
+keep stop --all               # 停止 keep 管理的所有项目
 ```
+
+## Procfile 兼容模式
+
+Procfile 不参与自动匹配，需要显式运行：
+
+```bash
+keep procfile start --file Procfile --project shop
+keep procfile convert --file Procfile --project shop > shop.yaml
+```
+
+架构和开发计划见 [docs](docs/README.md)。

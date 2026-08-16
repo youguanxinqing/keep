@@ -6,8 +6,8 @@ use indexmap::IndexMap;
 use thiserror::Error;
 
 use crate::config::{
-    ConfigError, ConfigFile, DefaultsConfig, LoadedConfig, ProcessConfig, ProcessMode,
-    ProjectConfig,
+    sanitize_identifier, ConfigError, ConfigFile, DefaultsConfig, LoadedConfig, ProcessConfig,
+    ProcessMode, ProjectConfig,
 };
 
 #[derive(Debug, Error)]
@@ -44,7 +44,7 @@ pub fn load_procfile(path: &Path, project_id: Option<&str>) -> Result<LoadedConf
     let inferred = root
         .file_name()
         .and_then(|name| name.to_str())
-        .map(sanitize_id)
+        .map(sanitize_identifier)
         .filter(|name| !name.is_empty())
         .unwrap_or_else(|| "procfile".into());
     let id = project_id.map(String::from).unwrap_or(inferred);
@@ -113,21 +113,6 @@ pub fn load_procfile(path: &Path, project_id: Option<&str>) -> Result<LoadedConf
 pub fn convert_procfile(path: &Path, project_id: Option<&str>) -> Result<String, ProcfileError> {
     let loaded = load_procfile(path, project_id)?;
     serde_yaml::to_string(&loaded.to_config_file()).map_err(ProcfileError::Encode)
-}
-
-fn sanitize_id(value: &str) -> String {
-    value
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || matches!(character, '_' | '-') {
-                character
-            } else {
-                '-'
-            }
-        })
-        .collect::<String>()
-        .trim_matches('-')
-        .to_string()
 }
 
 #[cfg(test)]

@@ -82,6 +82,7 @@ keep restart [project-or-process...]
 keep quit <project>
 
 keep config list
+keep config init [--local] [--project ID]
 keep config show [project]
 keep config resolve
 keep config validate [--all]

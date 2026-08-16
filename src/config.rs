@@ -489,7 +489,7 @@ fn validate_duration(label: &str, value: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_identifier(label: &str, value: &str) -> Result<(), String> {
+pub(crate) fn validate_identifier(label: &str, value: &str) -> Result<(), String> {
     let valid = !value.is_empty()
         && value.len() <= 48
         && value
@@ -502,6 +502,21 @@ fn validate_identifier(label: &str, value: &str) -> Result<(), String> {
             "{label} '{value}' must be at most 48 characters and contain only ASCII letters, digits, '_' or '-'"
         ))
     }
+}
+
+pub(crate) fn sanitize_identifier(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '_' | '-') {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string()
 }
 
 fn validate_acyclic(processes: &IndexMap<String, ProcessConfig>) -> Result<(), String> {

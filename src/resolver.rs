@@ -26,9 +26,10 @@ struct Candidate {
 }
 
 #[derive(Debug, Default)]
-struct GitContext {
-    root: Option<PathBuf>,
+pub(crate) struct GitContext {
+    pub(crate) root: Option<PathBuf>,
     remotes: Vec<String>,
+    pub(crate) primary_remote: Option<String>,
 }
 
 pub fn resolve_current(
@@ -190,7 +191,7 @@ fn expand_project_path(path: &str) -> Option<PathBuf> {
     }
 }
 
-fn inspect_git(current_directory: &Path) -> GitContext {
+pub(crate) fn inspect_git(current_directory: &Path) -> GitContext {
     let root_output = Command::new("git")
         .args(["rev-parse", "--show-toplevel"])
         .current_dir(current_directory)
@@ -213,6 +214,7 @@ fn inspect_git(current_directory: &Path) -> GitContext {
         .unwrap_or_default();
 
     let mut remotes = Vec::new();
+    let mut primary_remote = None;
     for name in remote_names.lines().filter(|name| !name.trim().is_empty()) {
         let output = Command::new("git")
             .args(["remote", "get-url", "--all", name])
@@ -220,11 +222,13 @@ fn inspect_git(current_directory: &Path) -> GitContext {
             .output();
         if let Ok(output) = output {
             if output.status.success() {
-                remotes.extend(
-                    String::from_utf8_lossy(&output.stdout)
-                        .lines()
-                        .map(normalize_git_url),
-                );
+                let urls = String::from_utf8_lossy(&output.stdout);
+                if let Some(first) = urls.lines().next() {
+                    if name == "origin" || primary_remote.is_none() {
+                        primary_remote = Some(normalize_git_url(first));
+                    }
+                }
+                remotes.extend(urls.lines().map(normalize_git_url));
             }
         }
     }
@@ -232,6 +236,7 @@ fn inspect_git(current_directory: &Path) -> GitContext {
     GitContext {
         root: Some(root),
         remotes,
+        primary_remote,
     }
 }
 

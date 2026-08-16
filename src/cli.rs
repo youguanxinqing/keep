@@ -1,12 +1,15 @@
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use clap::{Args, Parser, Subcommand};
 use thiserror::Error;
 
-use crate::config::{ConfigError, ConfigRepository};
+use crate::config::{
+    sanitize_identifier, validate_identifier, ConfigError, ConfigRepository, LoadedConfig,
+};
 use crate::procfile::{convert_procfile, load_procfile, ProcfileError};
-use crate::resolver::resolve_current;
+use crate::resolver::{inspect_git, resolve_current};
 use crate::runtime::{
     find_metadata, instance_directory, list_metadata, runtime_directory, send_request,
     try_project_lock, ControlRequest, InstanceMetadata, ProjectStatus, RuntimeError,
@@ -33,6 +36,22 @@ pub enum CliError {
     },
     #[error("doctor found one or more required checks failing")]
     DoctorFailed,
+    #[error("cannot determine a project ID from {0}; pass --project <ID>")]
+    ProjectIdUnavailable(PathBuf),
+    #[error("configuration already exists: {0}")]
+    ConfigAlreadyExists(PathBuf),
+    #[error("cannot create configuration directory {path}: {source}")]
+    CreateConfigDirectory {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    #[error("cannot write configuration {path}: {source}")]
+    WriteConfig {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    #[error("cannot encode configuration template: {0}")]
+    EncodeConfigTemplate(serde_json::Error),
 }
 
 #[derive(Debug, Parser)]
@@ -60,7 +79,7 @@ enum Command {
     Restart(RestartArgs),
     /// Gracefully shut down one project's supervisor.
     Quit(QuitArgs),
-    /// Inspect and validate keep configuration files.
+    /// Create, inspect, and validate keep configuration files.
     Config(ConfigArgs),
     /// Run or convert a Procfile through explicit compatibility mode.
     Procfile(ProcfileArgs),
@@ -152,6 +171,8 @@ struct ProcfileConvertArgs {
 
 #[derive(Debug, Subcommand)]
 enum ConfigCommand {
+    /// Create a minimal native configuration for the current project.
+    Init(ConfigInitArgs),
     /// List all valid project configurations.
     List,
     /// Display a configuration selected by ID/path or the current directory.
@@ -160,6 +181,16 @@ enum ConfigCommand {
     Validate(ValidateArgs),
     /// Explain which configuration matches the current project.
     Resolve(ConfigSelectionArgs),
+}
+
+#[derive(Debug, Args)]
+struct ConfigInitArgs {
+    /// Write keep.yaml in the current Git root instead of the global configuration directory.
+    #[arg(long)]
+    local: bool,
+    /// Stable project ID. Defaults to the current Git root or directory name.
+    #[arg(long, value_name = "ID")]
+    project: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -429,6 +460,7 @@ fn run_quit(args: QuitArgs) -> Result<(), CliError> {
 
 fn run_config(repository: ConfigRepository, command: ConfigCommand) -> Result<(), CliError> {
     match command {
+        ConfigCommand::Init(args) => return run_config_init(&repository, args),
         ConfigCommand::List => {
             let configs = repository.load_all()?;
             println!("ID\tNAME\tPATH\tCONFIG");
@@ -476,6 +508,81 @@ fn run_config(repository: ConfigRepository, command: ConfigCommand) -> Result<()
             println!("project root: {}", resolution.project_root.display());
             println!("working directory: {}", current_directory.display());
         }
+    }
+    Ok(())
+}
+
+fn run_config_init(repository: &ConfigRepository, args: ConfigInitArgs) -> Result<(), CliError> {
+    let current = current_directory()?;
+    let current = current.canonicalize().unwrap_or(current);
+    let git = inspect_git(&current);
+    let root = git.root.unwrap_or(current);
+    let project = args.project.unwrap_or_else(|| {
+        root.file_name()
+            .and_then(|name| name.to_str())
+            .map(sanitize_identifier)
+            .unwrap_or_default()
+    });
+    if project.is_empty() {
+        return Err(CliError::ProjectIdUnavailable(root));
+    }
+
+    let target = if args.local {
+        root.join("keep.yaml")
+    } else {
+        repository.directory().join(format!("{project}.yaml"))
+    };
+    validate_identifier("project id", &project).map_err(|message| ConfigError::InvalidConfig {
+        path: target.clone(),
+        message,
+    })?;
+    let target_directory = target.parent().unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(target_directory).map_err(|source| CliError::CreateConfigDirectory {
+        path: target_directory.to_path_buf(),
+        source,
+    })?;
+
+    let project_match = if let Some(remote) = git.primary_remote {
+        let remote = serde_json::to_string(&remote).map_err(CliError::EncodeConfigTemplate)?;
+        format!("  git:\n    - {remote}\n")
+    } else {
+        let path = serde_json::to_string(root.to_string_lossy().as_ref())
+            .map_err(CliError::EncodeConfigTemplate)?;
+        format!("  path: {path}\n")
+    };
+    let contents = format!(
+        "version: 1\n\nproject:\n  id: {project}\n{project_match}\nprocesses:\n  app:\n    command: echo \"configure this process\"\n"
+    );
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&target)
+        .map_err(|source| {
+            if source.kind() == std::io::ErrorKind::AlreadyExists {
+                CliError::ConfigAlreadyExists(target.clone())
+            } else {
+                CliError::WriteConfig {
+                    path: target.clone(),
+                    source,
+                }
+            }
+        })?;
+    file.write_all(contents.as_bytes())
+        .map_err(|source| CliError::WriteConfig {
+            path: target.clone(),
+            source,
+        })?;
+    LoadedConfig::load(&target)?;
+
+    println!("created {}", target.display());
+    if args.local {
+        println!(
+            "next: edit {}, then run `keep start --config {}`",
+            target.display(),
+            target.display()
+        );
+    } else {
+        println!("next: edit {}, then run `keep start`", target.display());
     }
     Ok(())
 }
