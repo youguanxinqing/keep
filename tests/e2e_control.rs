@@ -150,9 +150,22 @@ processes:
     );
     assert!(status.status.success(), "{}", supervisor.logs());
     let stdout = String::from_utf8_lossy(&status.stdout);
-    assert!(stdout.contains("STATUS\tRESTARTS\tDETAIL"));
-    assert!(stdout.contains("shop\tapi\t"));
-    assert!(stdout.contains("\tready\t0\t"));
+    assert_eq!(
+        stdout
+            .lines()
+            .next()
+            .unwrap()
+            .split_whitespace()
+            .collect::<Vec<_>>(),
+        ["PROJECT", "PROCESS", "PID", "STATUS", "RESTARTS", "DETAIL", "ROOT"]
+    );
+    assert!(stdout.lines().any(|line| {
+        let fields = line.split_whitespace().collect::<Vec<_>>();
+        fields.first() == Some(&"shop")
+            && fields.get(1) == Some(&"api")
+            && fields.get(3) == Some(&"ready")
+            && fields.get(4) == Some(&"0")
+    }));
 
     let status_all = keep(
         config_dir.path(),
@@ -161,7 +174,9 @@ processes:
         &["status"],
     );
     assert!(status_all.status.success());
-    assert!(String::from_utf8_lossy(&status_all.stdout).contains("shop\tapi\t"));
+    assert!(String::from_utf8_lossy(&status_all.stdout)
+        .lines()
+        .any(|line| line.split_whitespace().take(2).eq(["shop", "api"])));
 
     let restart_current = keep(
         config_dir.path(),
@@ -264,8 +279,16 @@ processes:
         &["ls", "shop"],
     );
     let stdout = String::from_utf8_lossy(&initial.stdout);
-    assert!(stdout.contains("shop\tprepare\t-\tcompleted"), "{stdout}");
-    assert!(stdout.contains("shop\tworker\t-\tstopped"), "{stdout}");
+    let has_state = |process, state| {
+        stdout.lines().any(|line| {
+            let fields = line.split_whitespace().collect::<Vec<_>>();
+            fields.first() == Some(&"shop")
+                && fields.get(1) == Some(&process)
+                && fields.get(3) == Some(&state)
+        })
+    };
+    assert!(has_state("prepare", "completed"), "{stdout}");
+    assert!(has_state("worker", "stopped"), "{stdout}");
 
     let start_worker = keep(
         config_dir.path(),

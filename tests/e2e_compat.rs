@@ -131,9 +131,13 @@ fn procfile_start_registers_processes_for_global_commands() {
             &["ls", "legacy"],
         );
         let stdout = String::from_utf8_lossy(&output.stdout);
-        output.status.success()
-            && stdout.contains("legacy\tweb\t")
-            && stdout.contains("legacy\tworker\t")
+        let has_process = |name| {
+            stdout.lines().any(|line| {
+                let mut fields = line.split_whitespace();
+                fields.next() == Some("legacy") && fields.next() == Some(name)
+            })
+        };
+        output.status.success() && has_process("web") && has_process("worker")
     }));
     assert_eq!(
         fs::read_to_string(project.path().join("legacy-env"))

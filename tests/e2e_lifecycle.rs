@@ -209,7 +209,10 @@ processes:
     );
     let stdout = String::from_utf8_lossy(&status.stdout);
     assert!(
-        stdout.contains("\tready\t1\t"),
+        stdout.lines().any(|line| {
+            let fields = line.split_whitespace().collect::<Vec<_>>();
+            fields.get(3) == Some(&"ready") && fields.get(4) == Some(&"1")
+        }),
         "{stdout}\n{}",
         running.logs()
     );

@@ -637,11 +637,25 @@ fn query_status(metadata: &InstanceMetadata) -> Result<ProjectStatus, CliError> 
 }
 
 fn print_statuses(statuses: &[ProjectStatus], process_filter: Option<&str>, detailed: bool) {
-    if detailed {
-        println!("PROJECT\tPROCESS\tPID\tSTATUS\tRESTARTS\tDETAIL\tROOT");
+    let mut rows = if detailed {
+        vec![vec![
+            "PROJECT".into(),
+            "PROCESS".into(),
+            "PID".into(),
+            "STATUS".into(),
+            "RESTARTS".into(),
+            "DETAIL".into(),
+            "ROOT".into(),
+        ]]
     } else {
-        println!("PROJECT\tPROCESS\tPID\tSTATUS\tROOT");
-    }
+        vec![vec![
+            "PROJECT".into(),
+            "PROCESS".into(),
+            "PID".into(),
+            "STATUS".into(),
+            "ROOT".into(),
+        ]]
+    };
     for project in statuses {
         for process in &project.processes {
             if process_filter.is_some_and(|filter| filter != process.name) {
@@ -651,25 +665,46 @@ fn print_statuses(statuses: &[ProjectStatus], process_filter: Option<&str>, deta
                 .pid
                 .map_or_else(|| "-".into(), |pid| pid.to_string());
             if detailed {
-                println!(
-                    "{}\t{}\t{}\t{}\t{}\t{}\t{}",
-                    project.id,
-                    process.name,
+                rows.push(vec![
+                    project.id.clone(),
+                    process.name.clone(),
                     pid,
-                    process.state,
-                    process.restart_count,
-                    process.detail.as_deref().unwrap_or("-"),
-                    project.root.display()
-                );
+                    process.state.to_string(),
+                    process.restart_count.to_string(),
+                    process.detail.clone().unwrap_or_else(|| "-".into()),
+                    project.root.display().to_string(),
+                ]);
             } else {
-                println!(
-                    "{}\t{}\t{}\t{}\t{}",
-                    project.id,
-                    process.name,
+                rows.push(vec![
+                    project.id.clone(),
+                    process.name.clone(),
                     pid,
-                    process.state,
-                    project.root.display()
-                );
+                    process.state.to_string(),
+                    project.root.display().to_string(),
+                ]);
+            }
+        }
+    }
+    print_table(&rows, if detailed { &[2, 4] } else { &[2] });
+}
+
+fn print_table(rows: &[Vec<String>], right_aligned: &[usize]) {
+    let widths = (0..rows[0].len() - 1)
+        .map(|column| {
+            rows.iter()
+                .map(|row| row[column].chars().count())
+                .max()
+                .unwrap_or_default()
+        })
+        .collect::<Vec<_>>();
+    for row in rows {
+        for (column, value) in row.iter().enumerate() {
+            if column == widths.len() {
+                println!("{value}");
+            } else if right_aligned.contains(&column) {
+                print!("{value:>width$}  ", width = widths[column]);
+            } else {
+                print!("{value:<width$}  ", width = widths[column]);
             }
         }
     }

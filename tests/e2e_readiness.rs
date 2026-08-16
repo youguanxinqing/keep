@@ -275,7 +275,9 @@ processes:
                 &["status", "ready/final"],
             );
             output.status.success()
-                && String::from_utf8_lossy(&output.stdout).contains("\tblocked\t")
+                && String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .any(|line| line.split_whitespace().nth(3) == Some("blocked"))
         }),
         "{}",
         guard.logs()
@@ -304,9 +306,19 @@ processes:
         "threshold",
         "final",
     ] {
-        assert!(stdout.contains(&format!("ready\t{process}\t")), "{stdout}");
+        assert!(
+            stdout
+                .lines()
+                .any(|line| line.split_whitespace().take(2).eq(["ready", process])),
+            "{stdout}"
+        );
     }
-    assert!(!stdout.contains("\tchecking\t"), "{stdout}");
+    assert!(
+        !stdout
+            .lines()
+            .any(|line| line.split_whitespace().nth(3) == Some("checking")),
+        "{stdout}"
+    );
     assert_eq!(fs::read_to_string(threshold_count).unwrap(), "2\n");
     http_thread.join().unwrap();
     https_thread.join().unwrap();
@@ -373,9 +385,17 @@ processes:
                 &["status", "failure"],
             );
             let stdout = String::from_utf8_lossy(&status.stdout);
+            let has_state = |process, state| {
+                stdout.lines().any(|line| {
+                    let fields = line.split_whitespace().collect::<Vec<_>>();
+                    fields.first() == Some(&"failure")
+                        && fields.get(1) == Some(&process)
+                        && fields.get(3) == Some(&state)
+                })
+            };
             status.status.success()
-                && stdout.contains("failure\tservice\t-\tfailed\t")
-                && stdout.contains("failure\tdownstream\t-\tblocked\t")
+                && has_state("service", "failed")
+                && has_state("downstream", "blocked")
                 && stdout.contains("timed out")
         }),
         "{}",
@@ -447,7 +467,10 @@ processes:
             unrelated.path(),
             &["status", "deadline/service"],
         );
-        status.status.success() && String::from_utf8_lossy(&status.stdout).contains("\tfailed\t")
+        status.status.success()
+            && String::from_utf8_lossy(&status.stdout)
+                .lines()
+                .any(|line| line.split_whitespace().nth(3) == Some("failed"))
     });
     let elapsed = started.elapsed();
     let pid = wait_for(Duration::from_secs(1), || probe_pid.is_file())

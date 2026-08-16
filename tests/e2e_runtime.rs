@@ -285,14 +285,42 @@ fn start_runs_dependencies_and_global_ls_and_stop_work_from_another_directory() 
         );
         let stdout = String::from_utf8_lossy(&output.stdout);
         output.status.success()
-            && stdout.lines().any(|line| {
-                let columns = line.split('\t').collect::<Vec<_>>();
-                columns.first() == Some(&"shop")
-                    && columns.get(1) == Some(&"api")
-                    && columns.get(3) == Some(&"ready")
-            })
+            && stdout
+                .lines()
+                .map(|line| line.split_whitespace().collect::<Vec<_>>())
+                .any(|columns| {
+                    columns.first() == Some(&"shop")
+                        && columns.get(1) == Some(&"api")
+                        && columns.get(3) == Some(&"ready")
+                })
     });
     assert!(listed, "supervisor logs:\n{}", supervisor.logs());
+    let list = keep(
+        config_dir.path(),
+        runtime_dir.path(),
+        unrelated.path(),
+        &["ls"],
+    );
+    let stdout = String::from_utf8_lossy(&list.stdout);
+    assert!(!stdout.contains('\t'), "{stdout:?}");
+    let lines = stdout.lines().collect::<Vec<_>>();
+    let header = lines[0];
+    let prepare = lines
+        .iter()
+        .find(|line| line.split_whitespace().nth(1) == Some("prepare"))
+        .unwrap();
+    let api = lines
+        .iter()
+        .find(|line| line.split_whitespace().nth(1) == Some("api"))
+        .unwrap();
+    let process_column = header.find("PROCESS").unwrap();
+    let status_column = header.find("STATUS").unwrap();
+    let root_column = header.find("ROOT").unwrap();
+    assert_eq!(prepare.find("prepare"), Some(process_column), "{stdout}");
+    assert_eq!(api.find("api"), Some(process_column), "{stdout}");
+    assert_eq!(prepare.find("completed"), Some(status_column), "{stdout}");
+    assert_eq!(api.find("ready"), Some(status_column), "{stdout}");
+    assert_eq!(&prepare[root_column..], &api[root_column..], "{stdout}");
     assert!(
         wait_for(Duration::from_secs(2), || {
             fs::read_to_string(&marker).is_ok_and(|contents| contents == "prepare\napi\n")
@@ -349,9 +377,12 @@ fn stop_can_target_one_process_without_stopping_its_sibling() {
                 &["ls", "shop"],
             );
             let stdout = String::from_utf8_lossy(&output.stdout);
-            output.status.success()
-                && stdout.contains("shop\tapi\t")
-                && stdout.contains("shop\tworker\t")
+            let has_process = |name| {
+                stdout
+                    .lines()
+                    .any(|line| line.split_whitespace().take(2).eq(["shop", name]))
+            };
+            output.status.success() && has_process("api") && has_process("worker")
         }),
         "supervisor logs:\n{}",
         supervisor.logs()
@@ -388,9 +419,16 @@ fn stop_can_target_one_process_without_stopping_its_sibling() {
         &["ls", "shop"],
     );
     let stdout = String::from_utf8_lossy(&listed.stdout);
-    assert!(stdout.contains("shop\tworker\t-\tstopped\t"), "{stdout}");
-    assert!(stdout.contains("shop\tapi\t"), "{stdout}");
-    assert!(stdout.contains("\tready\t"), "{stdout}");
+    let has_state = |process, state| {
+        stdout.lines().any(|line| {
+            let fields = line.split_whitespace().collect::<Vec<_>>();
+            fields.first() == Some(&"shop")
+                && fields.get(1) == Some(&process)
+                && fields.get(3) == Some(&state)
+        })
+    };
+    assert!(has_state("worker", "stopped"), "{stdout}");
+    assert!(has_state("api", "ready"), "{stdout}");
 
     let stop_project = keep(
         config_dir.path(),
@@ -448,9 +486,14 @@ fn ls_discovers_processes_from_multiple_foreground_supervisors() {
                 &["ls"],
             );
             let stdout = String::from_utf8_lossy(&output.stdout);
+            let has_process = |project, process| {
+                stdout
+                    .lines()
+                    .any(|line| line.split_whitespace().take(2).eq([project, process]))
+            };
             output.status.success()
-                && stdout.contains("alpha\tserver\t")
-                && stdout.contains("beta\tworker\t")
+                && has_process("alpha", "server")
+                && has_process("beta", "worker")
         }),
         "alpha logs:\n{}\nbeta logs:\n{}",
         alpha.logs(),
