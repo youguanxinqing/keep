@@ -9,3 +9,4 @@ adding an end-to-end test for that behavior.
 - [Architecture](architecture.md)
 - [Testing strategy](testing.md)
 - [Roadmap](roadmap.md)
+- [Process output, logs, and one-off task research](research-process-output-and-tasks.md)
