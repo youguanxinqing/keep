@@ -133,6 +133,8 @@ Shutdown behavior:
 - The whole project stops in reverse dependency order.
 - Each process receives its configured graceful stop signal.
 - The entire process group is killed after the stop timeout.
+- A process is stopped only after its leader has been reaped and the process
+  group is empty. Normal task/service exit also kills leftover descendants.
 - A targeted process operation does not implicitly restart or kill unrelated
   running processes.
 

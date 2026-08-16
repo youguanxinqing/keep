@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use nix::errno::Errno;
 use nix::pty::{openpty, Winsize};
 use nix::sys::signal::{self, Signal};
 use nix::unistd::{setsid, Pid};
@@ -32,6 +33,7 @@ const LOOP_INTERVAL: Duration = Duration::from_millis(25);
 const CONTROL_IO_TIMEOUT: Duration = Duration::from_millis(500);
 const MAX_CONTROL_REQUEST_BYTES: usize = 16 * 1024;
 const OUTPUT_QUEUE_CAPACITY: usize = 128;
+const PROCESS_GROUP_EXIT_TIMEOUT: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Error)]
 pub enum SupervisorError {
@@ -505,6 +507,9 @@ impl Supervisor {
                 continue;
             };
             process.cancel_probe();
+            if let Some(pid) = process.pid {
+                kill_process_group(Pid::from_raw(pid as i32));
+            }
             process.pid = None;
             process.child = None;
             exits.push((index, status));
@@ -1138,14 +1143,16 @@ fn stop_managed_process(process: &mut ManagedProcess, stop_signal: Signal, timeo
             match child.try_wait() {
                 Ok(Some(_)) => {
                     process.child = None;
-                    process.pid = None;
-                    process.state = ProcessState::Stopped;
-                    process.detail = Some("stopped gracefully".into());
-                    return;
                 }
                 Ok(None) => {}
                 Err(_) => break,
             }
+        }
+        if !process_group_exists(group) {
+            process.pid = None;
+            process.state = ProcessState::Stopped;
+            process.detail = Some("stopped gracefully".into());
+            return;
         }
         thread::sleep(LOOP_INTERVAL);
     }
@@ -1153,9 +1160,31 @@ fn stop_managed_process(process: &mut ManagedProcess, stop_signal: Signal, timeo
     if let Some(mut child) = process.child.take() {
         let _ = child.wait();
     }
+    wait_for_process_group_exit(group);
     process.pid = None;
     process.state = ProcessState::Stopped;
     process.detail = Some(format!("killed after {timeout:?}"));
+}
+
+fn kill_process_group(group: Pid) {
+    let _ = signal::killpg(group, Signal::SIGKILL);
+    wait_for_process_group_exit(group);
+}
+
+fn wait_for_process_group_exit(group: Pid) {
+    let deadline = Instant::now()
+        .checked_add(PROCESS_GROUP_EXIT_TIMEOUT)
+        .unwrap_or_else(Instant::now);
+    while process_group_exists(group) && Instant::now() < deadline {
+        thread::sleep(LOOP_INTERVAL);
+    }
+}
+
+fn process_group_exists(group: Pid) -> bool {
+    !matches!(
+        signal::kill(Pid::from_raw(-group.as_raw()), None),
+        Err(Errno::ESRCH)
+    )
 }
 
 fn parse_signal(value: &str) -> Signal {

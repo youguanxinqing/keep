@@ -68,6 +68,8 @@ Required scenarios include:
 - restart one process and observe a new PID without restarting siblings;
 - display a blocked dependency and readiness diagnostic;
 - forward graceful signals, then force-kill a process that ignores them;
+- prove task completion, Ctrl-C, and `keep stop` reap the process leader and
+  leave no surviving or zombie process-group members;
 - reject duplicate IDs, dependency cycles, unknown fields, and ambiguous
   project matches;
 - prefer repository-local `keep.yaml` over a matching global configuration;
@@ -87,9 +89,31 @@ The justfile exposes:
 just test       # all Rust tests
 just test-unit  # library unit tests
 just test-e2e   # compiled-binary end-to-end tests
+just perf       # release-mode output throughput and memory budget
 just check      # format check, lints, and all tests
 ```
 
 `just check` is the CI-ready entry point. Tests that require an unavailable
 operating-system feature must report an explicit skip reason; core command tests
 may not silently skip.
+
+## Performance regression check
+
+`just perf` builds the release binary, runs 100,000 prefixed output lines through
+the real PTY and output multiplexer, and reports elapsed time, lines per second,
+and peak child RSS. The default budgets are intentionally broad: 5 seconds and
+64 MiB. They catch accidental unbounded buffering or severe per-line overhead
+without pretending different development and CI machines have identical speed.
+
+The workload and budgets can be overridden for a stable benchmark runner:
+
+```bash
+KEEP_PERF_LINES=1000000 \
+KEEP_PERF_MAX_SECONDS=10 \
+KEEP_PERF_MAX_RSS_MIB=64 \
+just perf
+```
+
+Keep this check separate from `just check`: correctness runs on every change;
+performance should run on a stable machine or scheduled CI job where timing
+comparisons are meaningful.

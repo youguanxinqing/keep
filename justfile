@@ -21,6 +21,9 @@ test-unit:
 test-e2e:
     cargo test --tests --all-features
 
+perf:
+    cargo test --release --test perf_output -- --ignored --nocapture
+
 check: fmt-check lint test
 
 build:

@@ -61,7 +61,10 @@ Starts each command in a separate Unix process group. stdout and stderr use
 separate output-only native pseudo-terminals so terminal-aware programs retain
 normal flushing while the streams remain distinguishable. It exposes process
 events, output, group signaling, and exit status. Graceful stop signals target
-the group, followed by `SIGKILL` after the configured timeout.
+the group, followed by `SIGKILL` after the configured timeout. The supervisor
+reaps every direct process leader and does not mark stop complete while members
+remain in its process group; descendants left behind by a completed leader are
+killed before output is drained.
 
 ### Readiness engine
 

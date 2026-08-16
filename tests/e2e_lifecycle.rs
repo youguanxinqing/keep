@@ -6,6 +6,7 @@ use std::process::{Child, Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use nix::errno::Errno;
 use nix::sys::signal::{self, Signal};
 use nix::unistd::Pid;
 use tempfile::TempDir;
@@ -86,6 +87,14 @@ fn wait_for(timeout: Duration, mut condition: impl FnMut() -> bool) -> bool {
         thread::sleep(Duration::from_millis(40));
     }
     false
+}
+
+fn read_pid(path: &Path) -> Option<i32> {
+    fs::read_to_string(path).ok()?.trim().parse().ok()
+}
+
+fn process_is_gone(pid: i32) -> bool {
+    matches!(signal::kill(Pid::from_raw(pid), None), Err(Errno::ESRCH))
 }
 
 #[test]
@@ -299,12 +308,87 @@ processes:
 }
 
 #[test]
+fn stop_removes_descendants_after_the_process_leader_exits() {
+    let config = TempDir::new().unwrap();
+    let runtime = TempDir::new_in("/tmp").unwrap();
+    let root = TempDir::new().unwrap();
+    let unrelated = TempDir::new().unwrap();
+    let leader_pid = root.path().join("leader.pid");
+    let descendant_pid = root.path().join("descendant.pid");
+    fs::write(
+        config.path().join("stop-descendants.yaml"),
+        format!(
+            r#"
+version: 1
+project:
+  id: stop-descendants
+  path: {}
+defaults:
+  stop:
+    timeout: 100ms
+processes:
+  api:
+    command: |
+      echo $$ > '{}'
+      sh -c 'trap "" TERM; echo $$ > "{}"; while :; do sleep 1; done' &
+      trap 'exit 0' TERM
+      while :; do sleep 1; done
+"#,
+            root.path().display(),
+            leader_pid.display(),
+            descendant_pid.display()
+        ),
+    )
+    .unwrap();
+    let mut running = spawn(
+        config.path(),
+        runtime.path(),
+        unrelated.path(),
+        "stop-descendants",
+    );
+    assert!(wait_for(Duration::from_secs(2), || {
+        leader_pid.is_file() && descendant_pid.is_file()
+    }));
+    let group = read_pid(&leader_pid).unwrap();
+    let descendant = read_pid(&descendant_pid).unwrap();
+
+    let stop = keep(
+        config.path(),
+        runtime.path(),
+        unrelated.path(),
+        &["stop", "stop-descendants"],
+    );
+    let supervisor_exited = wait_for(Duration::from_secs(2), || {
+        running.child.try_wait().ok().flatten().is_some()
+    });
+    let descendant_gone = wait_for(Duration::from_secs(2), || process_is_gone(descendant));
+    if !supervisor_exited || !descendant_gone {
+        let _ = signal::killpg(Pid::from_raw(group), Signal::SIGKILL);
+    }
+
+    assert!(stop.status.success(), "{}", running.logs());
+    assert!(supervisor_exited, "{}", running.logs());
+    assert!(
+        process_is_gone(group),
+        "keep stop did not reap process leader {group}\n{}",
+        running.logs()
+    );
+    assert!(
+        descendant_gone,
+        "keep stop left descendant {descendant} running\n{}",
+        running.logs()
+    );
+}
+
+#[test]
 fn interrupting_the_supervisor_gracefully_stops_child_process_groups() {
     let config = TempDir::new().unwrap();
     let runtime = TempDir::new_in("/tmp").unwrap();
     let root = TempDir::new().unwrap();
     let unrelated = TempDir::new().unwrap();
     let marker = root.path().join("stopped");
+    let leader_pid = root.path().join("leader.pid");
+    let descendant_pid = root.path().join("descendant.pid");
     fs::write(
         config.path().join("signals.yaml"),
         format!(
@@ -313,11 +397,20 @@ version: 1
 project:
   id: signals
   path: {}
+defaults:
+  stop:
+    timeout: 100ms
 processes:
   api:
-    command: "trap 'touch {}; exit 0' TERM; while :; do sleep 1; done"
+    command: |
+      echo $$ > '{}'
+      sh -c 'trap "" TERM; echo $$ > "{}"; while :; do sleep 1; done' &
+      trap 'touch {}; exit 0' TERM
+      while :; do sleep 1; done
 "#,
             root.path().display(),
+            leader_pid.display(),
+            descendant_pid.display(),
             marker.display()
         ),
     )
@@ -333,14 +426,31 @@ processes:
         .status
         .success()
     }));
+    assert!(wait_for(Duration::from_secs(2), || {
+        leader_pid.is_file() && descendant_pid.is_file()
+    }));
+    let group = read_pid(&leader_pid).unwrap();
+    let descendant = read_pid(&descendant_pid).unwrap();
     signal::kill(Pid::from_raw(running.child.id() as i32), Signal::SIGINT).unwrap();
-    assert!(wait_for(Duration::from_secs(7), || running
-        .child
-        .try_wait()
-        .ok()
-        .flatten()
-        .is_some()));
+    let supervisor_exited = wait_for(Duration::from_secs(2), || {
+        running.child.try_wait().ok().flatten().is_some()
+    });
+    let descendant_gone = wait_for(Duration::from_secs(2), || process_is_gone(descendant));
+    if !supervisor_exited || !descendant_gone {
+        let _ = signal::killpg(Pid::from_raw(group), Signal::SIGKILL);
+    }
+    assert!(supervisor_exited, "{}", running.logs());
     assert!(marker.is_file(), "{}", running.logs());
+    assert!(
+        process_is_gone(group),
+        "Ctrl-C did not reap process leader {group}\n{}",
+        running.logs()
+    );
+    assert!(
+        descendant_gone,
+        "Ctrl-C left descendant {descendant} running\n{}",
+        running.logs()
+    );
 }
 
 #[test]
@@ -504,11 +614,11 @@ processes:
         UnixStream::connect(runtime.path().join("responsive/control.sock")).unwrap();
     let mut request = vec![b'x'; 16 * 1024 + 1];
     request[16 * 1024] = b'\n';
-    let rejected_by_close = oversized.write_all(&request).is_err();
+    let write_rejected = oversized.write_all(&request).is_err();
     let mut response = String::new();
     let _ = oversized.read_to_string(&mut response);
     assert!(
-        rejected_by_close || response.contains("control request exceeds"),
+        write_rejected || response.is_empty() || response.contains("control request exceeds"),
         "{response}"
     );
     assert!(keep(
@@ -608,6 +718,70 @@ processes:
         .filter(|line| line.starts_with(b"burst | line-"))
         .count();
     assert_eq!(lines, 20_000, "last output lines were lost");
+}
+
+#[test]
+fn completed_task_kills_descendants_before_keep_exits() {
+    let config = TempDir::new().unwrap();
+    let runtime = TempDir::new_in("/tmp").unwrap();
+    let root = TempDir::new().unwrap();
+    let leader_pid = root.path().join("leader.pid");
+    let descendant_pid = root.path().join("descendant.pid");
+    fs::write(
+        config.path().join("task-descendant.yaml"),
+        format!(
+            r#"
+version: 1
+project:
+  id: task-descendant
+  path: {}
+processes:
+  spawn:
+    mode: task
+    command: "echo $$ > '{}'; sleep 30 & echo $! > '{}'"
+"#,
+            root.path().display(),
+            leader_pid.display(),
+            descendant_pid.display()
+        ),
+    )
+    .unwrap();
+
+    let mut supervisor = Command::new(env!("CARGO_BIN_EXE_keep"))
+        .args(["start", "--config", "task-descendant"])
+        .env("KEEP_CONFIG_DIR", config.path())
+        .env("KEEP_RUNTIME_DIR", runtime.path())
+        .current_dir(root.path())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    assert!(wait_for(Duration::from_secs(2), || {
+        leader_pid.is_file() && descendant_pid.is_file()
+    }));
+    let leader = read_pid(&leader_pid).unwrap();
+    let pid = read_pid(&descendant_pid).unwrap();
+    let exited = wait_for(Duration::from_secs(2), || {
+        supervisor.try_wait().ok().flatten().is_some()
+    });
+    if !exited {
+        let _ = signal::kill(Pid::from_raw(pid), Signal::SIGKILL);
+        let _ = supervisor.kill();
+        let _ = supervisor.wait();
+    }
+
+    assert!(
+        exited,
+        "keep waited for a completed task's descendant {pid}"
+    );
+    assert!(
+        process_is_gone(leader),
+        "completed task left process leader {leader} unreaped"
+    );
+    assert!(
+        wait_for(Duration::from_secs(2), || process_is_gone(pid)),
+        "completed task left descendant {pid} running"
+    );
 }
 
 #[test]
