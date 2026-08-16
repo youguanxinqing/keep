@@ -29,7 +29,7 @@ feature to its required end-to-end coverage.
 Unit tests cover pure or narrowly scoped behavior:
 
 - schema parsing and source-aware errors;
-- project ID and process name validation;
+- effective project ID fallback and process name validation;
 - path and Git URL normalization;
 - resolver ranking and ambiguity;
 - dependency cycle detection and topological batches;

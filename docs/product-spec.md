@@ -31,7 +31,9 @@ Native configuration files live in:
 ```
 
 `KEEP_CONFIG_DIR` may override this location for testing and automation. A
-native configuration has a schema version and a globally unique project ID.
+native configuration has a schema version and a globally unique effective
+project ID. The effective ID is `project.id` when present, otherwise
+`project.name`.
 
 ## Project discovery
 
@@ -64,7 +66,7 @@ Consequences:
 - `keep stop shop` stops the `shop` project from any directory.
 - `keep stop shop/api` stops only the `api` process.
 - Moving or deleting a configuration after startup does not prevent shutdown.
-- A project ID identifies at most one active instance in version 1.
+- An effective project ID identifies at most one active instance in version 1.
 
 The global process address syntax is `<project-id>/<process-name>`.
 
@@ -82,7 +84,7 @@ keep restart [project-or-process...]
 keep quit <project>
 
 keep config list
-keep config init [--local] [--project ID]
+keep config init [--local] [--project NAME]
 keep config show [project]
 keep config resolve
 keep config validate [--all]

@@ -92,6 +92,43 @@ fn config_validate_all_executes_the_real_binary() {
 }
 
 #[test]
+fn config_name_is_used_as_id_when_id_is_omitted() {
+    let config_dir = TempDir::new().unwrap();
+    let working_dir = TempDir::new().unwrap();
+    write_config(
+        config_dir.path(),
+        "shop.yaml",
+        r#"
+version: 1
+project:
+  name: shop
+processes:
+  app:
+    command: run-app
+"#,
+    );
+
+    let validate = keep(
+        config_dir.path(),
+        working_dir.path(),
+        &["config", "validate", "--all"],
+    );
+    assert!(
+        validate.status.success(),
+        "{}",
+        String::from_utf8_lossy(&validate.stderr)
+    );
+
+    let list = keep(config_dir.path(), working_dir.path(), &["config", "list"]);
+    assert!(list.status.success());
+    assert!(
+        String::from_utf8_lossy(&list.stdout).contains("shop\tshop\t"),
+        "{}",
+        String::from_utf8_lossy(&list.stdout)
+    );
+}
+
+#[test]
 fn config_validate_one_by_project_id() {
     let config_dir = TempDir::new().expect("configuration directory");
     write_config(config_dir.path(), "different-file-name.yml", VALID_CONFIG);
@@ -450,7 +487,18 @@ fn config_validate_all_rejects_duplicate_project_ids() {
     let config_dir = TempDir::new().unwrap();
     let working_dir = TempDir::new().unwrap();
     write_config(config_dir.path(), "one.yaml", VALID_CONFIG);
-    write_config(config_dir.path(), "two.yaml", VALID_CONFIG);
+    write_config(
+        config_dir.path(),
+        "two.yaml",
+        r#"
+version: 1
+project:
+  name: shop
+processes:
+  app:
+    command: run-app
+"#,
+    );
 
     let output = keep(
         config_dir.path(),
@@ -509,7 +557,8 @@ fn config_init_creates_a_valid_minimal_global_template() {
     let target = config_dir.join("shop.yaml");
     let contents = fs::read_to_string(&target).unwrap();
     assert!(contents.contains("version: 1\n"), "{contents}");
-    assert!(contents.contains("  id: shop\n"), "{contents}");
+    assert!(contents.contains("  name: shop\n"), "{contents}");
+    assert!(!contents.contains("  id:"), "{contents}");
     assert!(
         contents.contains(&format!(
             "  path: {}\n",
@@ -572,7 +621,8 @@ fn config_init_local_uses_git_root_remote_and_refuses_overwrite() {
         String::from_utf8_lossy(&output.stdout)
     );
     let contents = fs::read_to_string(&target).unwrap();
-    assert!(contents.contains("  id: shop\n"), "{contents}");
+    assert!(contents.contains("  name: shop\n"), "{contents}");
+    assert!(!contents.contains("  id:"), "{contents}");
     assert!(
         contents.contains("    - \"github.com/acme/shop\"\n"),
         "{contents}"

@@ -23,9 +23,9 @@ keep --version
 在项目目录中生成最小模板：
 
 ```bash
-keep config init                    # 写入 ~/.config/keep/<项目 ID>.yaml
+keep config init                    # 写入 ~/.config/keep/<项目名称>.yaml
 keep config init --local            # 写入当前 Git 根目录的 keep.yaml
-keep config init --project shop     # 显式指定项目 ID
+keep config init --project shop     # 显式指定项目名称
 ```
 
 命令会优先记录 Git remote，没有 remote 时记录本地路径，并且不会覆盖已有文件。
@@ -35,8 +35,7 @@ keep config init --project shop     # 显式指定项目 ID
 version: 1
 
 project:
-  id: shop                    # 全局唯一，命令中用它指定项目
-  name: Shop
+  name: shop                  # 未配置 id 时，同时作为运行时 ID
   git:                        # 推荐：同一配置可用于不同 Git worktree
     - git@github.com:acme/shop.git
 

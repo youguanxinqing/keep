@@ -36,7 +36,7 @@ pub enum CliError {
     },
     #[error("doctor found one or more required checks failing")]
     DoctorFailed,
-    #[error("cannot determine a project ID from {0}; pass --project <ID>")]
+    #[error("cannot determine a project name from {0}; pass --project <NAME>")]
     ProjectIdUnavailable(PathBuf),
     #[error("configuration already exists: {0}")]
     ConfigAlreadyExists(PathBuf),
@@ -188,8 +188,8 @@ struct ConfigInitArgs {
     /// Write keep.yaml in the current Git root instead of the global configuration directory.
     #[arg(long)]
     local: bool,
-    /// Stable project ID. Defaults to the current Git root or directory name.
-    #[arg(long, value_name = "ID")]
+    /// Project name used as the runtime ID. Defaults to the current Git root or directory name.
+    #[arg(long, value_name = "NAME")]
     project: Option<String>,
 }
 
@@ -551,7 +551,7 @@ fn run_config_init(repository: &ConfigRepository, args: ConfigInitArgs) -> Resul
         format!("  path: {path}\n")
     };
     let contents = format!(
-        "version: 1\n\nproject:\n  id: {project}\n{project_match}\nprocesses:\n  app:\n    command: echo \"configure this process\"\n"
+        "version: 1\n\nproject:\n  name: {project}\n{project_match}\nprocesses:\n  app:\n    command: echo \"configure this process\"\n"
     );
     let mut file = OpenOptions::new()
         .write(true)

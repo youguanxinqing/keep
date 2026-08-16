@@ -4,6 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use indexmap::IndexMap;
+use serde::de::Error as _;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -228,18 +229,48 @@ impl LoadedConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ProjectConfig {
     pub id: String,
-    #[serde(default)]
     pub name: Option<String>,
-    #[serde(default)]
     pub path: Option<String>,
-    #[serde(default)]
     pub git: Vec<String>,
-    #[serde(default)]
     pub aliases: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProjectConfigInput {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    git: Vec<String>,
+    #[serde(default)]
+    aliases: Vec<String>,
+}
+
+impl<'de> Deserialize<'de> for ProjectConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let input = ProjectConfigInput::deserialize(deserializer)?;
+        let id = input
+            .id
+            .or_else(|| input.name.clone())
+            .ok_or_else(|| D::Error::custom("project requires 'id' or 'name'"))?;
+        Ok(Self {
+            id,
+            name: input.name,
+            path: input.path,
+            git: input.git,
+            aliases: input.aliases,
+        })
+    }
 }
 
 impl ProjectConfig {

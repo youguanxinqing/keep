@@ -32,9 +32,9 @@ with Rustls and does not require OpenSSL.
 
 ### Configuration repository
 
-Scans the configured directory, parses YAML, validates unique project IDs, and
-produces source-aware diagnostics. It exposes configurations by ID and as a set
-of candidates for automatic resolution.
+Scans the configured directory, parses YAML, derives `project.id` from
+`project.name` when omitted, validates unique effective project IDs, and produces
+source-aware diagnostics. Downstream modules always receive a validated ID.
 
 ### Project resolver
 

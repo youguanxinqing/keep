@@ -10,7 +10,7 @@ keep config validate --all
 keep config resolve
 ```
 
-`keep` 会拒绝未知字段、重复项目 ID、无效依赖和依赖环，避免拼写错误被静默忽略。
+`keep` 会拒绝未知字段、重复有效项目 ID、无效依赖和依赖环，避免拼写错误被静默忽略。
 
 ## 创建最小配置
 
@@ -20,9 +20,10 @@ keep config init --project shop
 keep config init --local
 ```
 
-默认写入 `~/.config/keep/<项目 ID>.yaml`。`--local` 改为在当前 Git 根目录写入
-`keep.yaml`，启动时使用提示中的 `keep start --config <文件>`。项目 ID 默认取 Git
-根目录或当前目录名称，也可以用 `--project` 指定。
+默认写入 `~/.config/keep/<项目名称>.yaml`。`--local` 改为在当前 Git 根目录写入
+`keep.yaml`，启动时使用提示中的 `keep start --config <文件>`。项目名称默认取 Git
+根目录或当前目录名称，也可以用 `--project` 指定；没有显式 `id` 时，该名称同时作为
+运行时 ID。
 
 生成器优先写入规范化且不含凭据的 Git remote，便于同一配置跨 worktree 使用；
 没有 remote 时写入当前项目的绝对 `path`。目标文件存在时会拒绝覆盖。
@@ -32,14 +33,14 @@ keep config init --local
 ```yaml
 version: 1
 project:
-  id: shop
+  name: shop
 processes:
   app:
     command: npm run dev
 ```
 
-其余字段全部按需使用。版本号保证未来可以安全升级格式；项目 ID 用于全局
-`ls/stop/status`；进程名和 command 是启动进程所必需的信息。配置没有引入
+其余字段全部按需使用。版本号保证未来可以安全升级格式；项目名称默认兼任全局
+`ls/stop/status` 使用的运行时 ID；进程名和 command 是启动进程所必需的信息。配置没有引入
 `depends_on` 列表短写、readiness 字符串短写等第二套语法，因为减少几行 YAML
 却会增加需要记忆的规则和解析分支。
 
@@ -130,14 +131,16 @@ processes:
 
 | 字段 | 类型 | 必填 | 默认值 | 说明 |
 | --- | --- | --- | --- | --- |
-| `id` | 字符串 | 是 | 无 | 稳定且全局唯一的项目 ID，也是 `keep stop shop` 中的 `shop`。 |
-| `name` | 字符串 | 否 | `id` | 展示名称，也可用于较弱的目录名匹配。 |
+| `id` | 字符串 | 二选一 | `name` | 可选的稳定运行时 ID，也是 `keep stop shop` 中的 `shop`。 |
+| `name` | 字符串 | 二选一 | `id` | 项目名称；没有 `id` 时同时作为运行时 ID。 |
 | `path` | 字符串 | 否 | 无 | 项目目录。支持绝对路径、`~/...`；其他相对路径从家目录解析。 |
 | `git` | 字符串列表 | 否 | `[]` | 可匹配的 Git remote。常见 SSH 和 HTTPS 写法会标准化后比较。 |
 | `aliases` | 字符串列表 | 否 | `[]` | 额外的项目目录名或 Git 根目录名。 |
 
-`id` 最长 48 个字符，只能使用 ASCII 字母、数字、`_` 和 `-`。同一配置目录内
-不能出现重复 ID。
+`id` 和 `name` 至少配置一个。有效运行时 ID 为 `id ?? name`：显式 `id` 始终优先；
+没有 `id` 时，`name` 最长 48 个字符且只能使用 ASCII 字母、数字、`_` 和 `-`。
+同一配置目录内不能出现重复的有效 ID。只有 `name` 时，修改名称等同于修改项目身份；
+需要独立的友好展示名称时应同时配置稳定 `id`。
 
 自动匹配顺序为：`--config` 显式指定、`project.path`、`project.git`，最后是
 `id`、`name` 或 `aliases` 与目录名匹配。同一级出现多个候选时会报错，不会猜测。
@@ -148,14 +151,13 @@ processes:
 
 ```yaml
 project:
-  id: shop
-  name: Shop
+  name: shop
   git:
     - git@github.com:acme/shop.git
 ```
 
-在任意 worktree 中执行 `keep start`，当前 Git 根目录会成为项目目录。同一个
-`project.id` 目前只能同时运行一个实例；并行启动多个 worktree 需要不同的 ID。
+在任意 worktree 中执行 `keep start`，当前 Git 根目录会成为项目目录。同一个有效
+项目 ID 目前只能同时运行一个实例；并行启动多个 worktree 需要不同的 ID。
 
 ## `defaults`
 
@@ -185,7 +187,7 @@ project:
 
 ## `processes.<name>`
 
-`<name>` 是进程名，格式限制与 `project.id` 相同，并且在项目内唯一。YAML 中的声明
+`<name>` 是进程名，格式限制与有效项目 ID 相同，并且在项目内唯一。YAML 中的声明
 顺序用于稳定日志顺序，以及同时满足条件时的启动顺序。
 
 | 字段 | 类型 | 必填 | 默认值 | 说明 |
@@ -269,7 +271,7 @@ command 检测继承该进程的环境，输出会被丢弃，超时会终止整
 - `project.path` 的相对路径从用户家目录解析。
 - `working_directory`、`env_files`、file target 和 `tls_ca` 的相对路径从项目根目录解析。
 - Unix socket 建议始终配置绝对路径。
-- 项目 ID 和进程名最长 48 个字符，只能包含 ASCII 字母、数字、`_` 和 `-`。
+- 有效项目 ID 和进程名最长 48 个字符，只能包含 ASCII 字母、数字、`_` 和 `-`。
 - 时长必须大于零，并且不能超过当前平台计时器可表示的范围。
 - HTTP 状态码必须在 100 到 599 之间。
 - 未知字段、空命令、空 target、缺失依赖、自依赖和依赖环都会导致校验失败。
