@@ -29,6 +29,11 @@ pub enum CliError {
     Procfile(#[from] ProcfileError),
     #[error("invalid target '{0}'; expected PROJECT or PROJECT/PROCESS")]
     InvalidTarget(String),
+    #[error("process '{process}' is running in multiple projects ({}); use PROJECT/PROCESS", .projects.join(", "))]
+    AmbiguousProcess {
+        process: String,
+        projects: Vec<String>,
+    },
     #[error("cannot read configuration {path}: {source}")]
     ReadConfig {
         path: PathBuf,
@@ -401,7 +406,7 @@ fn run_stop(args: StopArgs) -> Result<(), CliError> {
             .collect::<Result<Vec<_>, _>>()?
     };
     for target in targets {
-        let metadata = find_metadata(&runtime, &target.project)?;
+        let (metadata, target) = resolve_running_target(&runtime, target)?;
         let request = target.process.as_ref().map_or(
             ControlRequest::Shutdown {
                 version: PROTOCOL_VERSION,
@@ -431,7 +436,7 @@ fn run_restart(args: RestartArgs) -> Result<(), CliError> {
     };
     let runtime = runtime_directory()?;
     for target in targets {
-        let metadata = find_metadata(&runtime, &target.project)?;
+        let (metadata, target) = resolve_running_target(&runtime, target)?;
         send_request(
             &metadata,
             &ControlRequest::RestartProcesses {
@@ -750,6 +755,49 @@ fn print_table(rows: &[Vec<String>], right_aligned: &[usize]) {
                 print!("{value:<width$}  ", width = widths[column]);
             }
         }
+    }
+}
+
+/// Resolve a target against running projects. A bare name that is not a
+/// running project is treated as a process name and matched across running
+/// projects, preferring the current directory's project when ambiguous.
+fn resolve_running_target(
+    runtime: &Path,
+    target: Target,
+) -> Result<(InstanceMetadata, Target), CliError> {
+    match find_metadata(runtime, &target.project) {
+        Ok(metadata) => Ok((metadata, target)),
+        Err(RuntimeError::ProjectNotRunning(name)) if target.process.is_none() => {
+            let owners = collect_statuses(None)?
+                .into_iter()
+                .filter(|project| project.processes.iter().any(|process| process.name == name))
+                .map(|project| project.id)
+                .collect::<Vec<_>>();
+            let project = match owners.as_slice() {
+                [] => return Err(RuntimeError::ProjectNotRunning(name).into()),
+                [owner] => owner.clone(),
+                _ => match current_project_id()
+                    .ok()
+                    .filter(|current| owners.contains(current))
+                {
+                    Some(current) => current,
+                    None => {
+                        return Err(CliError::AmbiguousProcess {
+                            process: name,
+                            projects: owners,
+                        })
+                    }
+                },
+            };
+            Ok((
+                find_metadata(runtime, &project)?,
+                Target {
+                    project,
+                    process: Some(name),
+                },
+            ))
+        }
+        Err(error) => Err(error.into()),
     }
 }
 

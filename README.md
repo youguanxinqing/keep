@@ -127,6 +127,7 @@ keep ls                       # 查看所有项目和进程
 keep status shop              # 查看项目详情
 keep status shop/api          # 查看一个进程
 keep restart shop/api         # 重启一个进程
+keep restart api              # 进程名唯一时可省略项目
 keep stop shop/api            # 停止一个进程
 keep stop shop                # 停止整个项目
 keep stop --all               # 停止 keep 管理的所有项目

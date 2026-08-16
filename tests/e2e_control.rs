@@ -211,6 +211,27 @@ processes:
     assert!(wait_for(Duration::from_secs(5), || {
         fs::read_to_string(&pid_file).is_ok_and(|current| current != second_pid)
     }));
+    let third_pid = fs::read_to_string(&pid_file).unwrap();
+
+    let restart_bare_process = keep(
+        config_dir.path(),
+        runtime_dir.path(),
+        unrelated.path(),
+        &["restart", "api"],
+    );
+    assert!(
+        restart_bare_process.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&restart_bare_process.stderr),
+        supervisor.logs()
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&restart_bare_process.stdout),
+        "restarted shop/api\n"
+    );
+    assert!(wait_for(Duration::from_secs(5), || {
+        fs::read_to_string(&pid_file).is_ok_and(|current| current != third_pid)
+    }));
 
     let quit = keep(
         config_dir.path(),
