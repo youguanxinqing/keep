@@ -57,8 +57,10 @@ to update process state.
 
 ### Direct process backend
 
-Starts each command in a separate Unix process group. It exposes process events,
-stdout, stderr, group signaling, and exit status. Graceful stop signals target
+Starts each command in a separate Unix process group. stdout and stderr use
+separate output-only native pseudo-terminals so terminal-aware programs retain
+normal flushing while the streams remain distinguishable. It exposes process
+events, output, group signaling, and exit status. Graceful stop signals target
 the group, followed by `SIGKILL` after the configured timeout.
 
 ### Readiness engine
@@ -69,8 +71,9 @@ supervisor. Probe tasks never directly start dependent processes.
 ### Output multiplexer
 
 Reads stdout and stderr without blocking the supervisor, preserves emitted ANSI
-bytes, prefixes complete lines, and handles partial final lines. A slow control
-client must not block child output.
+bytes, and prefixes complete lines. Reader threads send lines through one bounded
+queue to a single writer; shutdown closes the queue and waits until pending output
+has been written. A slow control client must not block child output.
 
 ### Runtime registry
 
@@ -117,7 +120,7 @@ tested without starting real child processes.
 
 ## Backend evolution
 
-Version 1 keeps direct process execution inside the supervisor. A backend
-interface should be extracted only if native PTY or tmux execution is actually
-implemented; those backends may not alter configuration, dependency, registry,
-or control protocol semantics.
+Version 1 keeps direct process execution and output-only pseudo-terminals inside
+the supervisor. A backend interface should be extracted only if full interactive
+PTY or tmux execution is implemented; those backends may not alter configuration,
+dependency, registry, or control protocol semantics.

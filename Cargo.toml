@@ -11,7 +11,7 @@ clap = { version = "4.5.40", features = ["derive"] }
 dotenvy = "0.15.7"
 humantime = "2.2.0"
 indexmap = { version = "2.9.0", features = ["serde"] }
-nix = { version = "0.30.1", features = ["fs", "process", "signal", "user"] }
+nix = { version = "0.30.1", features = ["fs", "process", "signal", "term", "user"] }
 rustls = { version = "=0.23.38", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-pemfile = "2.2.0"
 serde = { version = "1.0.219", features = ["derive"] }

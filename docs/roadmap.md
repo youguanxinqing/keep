@@ -22,6 +22,7 @@
 ## Milestone 2: foreground direct supervisor
 
 - [x] Direct command execution in Unix process groups
+- [x] Output-only native PTYs for terminal-aware process flushing
 - [x] stdout/stderr aggregation and process-name prefixes
 - [x] Lifecycle state machine
 - [x] Signal forwarding and graceful/forced shutdown
@@ -58,7 +59,7 @@
 ## Later milestones
 
 - daemon mode and log subscription/history;
-- native PTY support;
+- full interactive PTY attachment;
 - optional tmux backend;
 - multiple instances and process scaling;
 - shell completions and cross-platform release packaging.

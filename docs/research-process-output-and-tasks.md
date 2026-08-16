@@ -4,22 +4,23 @@
 
 ## 结论
 
-1. `keep` 已经会捕获 stdout/stderr，并以 `<进程名> | <内容>` 输出。现在需要修的是
-   输出管线的生命周期和非 TTY 限制，不是再造一套输出功能。
+1. `keep` 已经会捕获 stdout/stderr，并以 `<进程名> | <内容>` 输出。实际复现确认
+   pipe 会让 Python 等程序默认缓冲；现已决定使用轻量的 output-only native PTY。
 2. `keep` 目前没有日志落盘。建议只增加每进程一个可选字段
    `log_directory`，始终保留终端输出，同时分别追加原始 stdout/stderr 文件。
 3. 一次性命令已经由 `mode: task` 表达。保留这个名字和现有
    `completed_successfully` 依赖条件，不增加 `once` 别名。
-4. 首版继续使用直接进程 backend；不为这些需求引入 tmux、PTY、日志服务或新的
-   第三方组件。
+4. 首版继续使用直接进程 backend；启用现有 `nix` 的 PTY 能力，但不引入 tmux、
+   交互式 attachment、日志服务或新的第三方组件。
 
 ## 1. 前台 stdout/stderr
 
 ### 当前行为
 
 `keep start` 首次启动项目时是前台 supervisor。每个命令通过 `sh -c` 启动，stdin
-设为 null，stdout/stderr 都设为 pipe；两个读取线程按行读取，再分别写回 `keep` 的
-stdout/stderr。前缀使用 YAML `processes` 下的 key，例如：
+设为 null，stdout/stderr 分别连接 output-only PTY；读取线程按行送入容量为 128 的
+有界队列，再由单个 writer 分别写回 `keep` 的 stdout/stderr。supervisor 退出前会关闭
+队列并等待 writer 排空。前缀使用 YAML `processes` 下的 key，例如：
 
 ```text
 api | listening on 127.0.0.1:3000
@@ -27,35 +28,30 @@ worker | processing job 42
 ```
 
 这个 process key 就是最稳定的 APP 标签：它在项目内必填且唯一。一个前台 supervisor
-只管理一个项目，因此默认不再重复打印 `project.name`；进程名按最长名称补齐即可。
+只管理一个项目，因此默认不再重复打印 `project.name`。
 
 终端输出时进程名前缀带稳定颜色；被重定向到文件或管道时不输出颜色。读取逻辑保留
 非 UTF-8 字节，并会为没有换行的最后一段补换行。
 
 来源：
 
-- `../src/supervisor.rs:325-370`：子进程 pipe 和两个输出读取线程。
+- `../src/supervisor.rs:325-385`：子进程 PTY 和两个输出读取线程。
 - `../src/supervisor.rs:1005-1050`：进程名前缀、终端颜色、逐行读取和写回目标流。
 - `../tests/e2e_lifecycle.rs:524-562`：非 UTF-8 输出的端到端覆盖。
-- `../docs/product-spec.md:139-157`：前台聚合输出和无 PTY 的既有产品约束。
+- `../docs/product-spec.md:139-160`：前台聚合输出和 output-only PTY 约束。
 
 ### 为什么用户仍可能看不到或延迟看到输出
 
-当前实现存在三个明确边界：
+当前实现存在两个明确边界：
 
 1. **已有 supervisor 的输出仍属于原终端。** 项目已经运行时，另一个终端执行
    `keep start <process>` 只通过 Unix socket 发送启动请求并立即返回；控制协议没有
    日志流。因此新终端不会接管该进程输出。
    来源：`../src/cli.rs:305-346`、`../src/supervisor.rs:609-623`。
-2. **pipe 不是 TTY。** 一些程序检测到 stdout 不是终端后会改为块缓冲、关闭颜色，
-   甚至直到缓冲区满或进程退出才输出。当前文档只明确记录了颜色影响，但同一个
-   非 TTY 条件也可能改变应用自己的刷新策略。
+2. **修复前的 pipe 不是 TTY。** Python 的默认 `print` 已实际复现为块缓冲，导致
+   长期运行进程看不到日志。output-only PTY 让程序恢复终端刷新行为，同时不引入
+   tmux 或交互式 stdin。
    来源：`../docs/product-spec.md:146-157`、`../third-party/overmind/README.md:20`、`:48`。
-3. **输出线程没有被等待。** `forward_output` 创建 detached thread，不返回
-   `JoinHandle`；supervisor 看到短任务退出后可以马上返回，无法保证两个 reader 已把
-   EOF 前的内容全部写完。这是短命令或最后一段输出可能丢失的代码风险。
-   来源：`../src/supervisor.rs:203-236`、`../src/supervisor.rs:454-513`、
-   `../src/supervisor.rs:1005-1041`。
 
 ### Overmind 可借鉴的设计
 
@@ -72,12 +68,12 @@ channel 并等待 writer 排空。
 - `../third-party/overmind/utils/utils.go:86-115`：避免普通 Scanner 长行上限的读取器。
 - `../third-party/overmind/README.md:40-51`：tmux/PTY 输出是 Overmind 的明确取舍。
 
-`keep` 应借鉴的是“有界队列、统一 writer、停止时排空、名称对齐”，不是 tmux 本身。
-建议让 supervisor 持有输出 multiplexer，在所有子进程 pipe 读完后关闭队列并等待
-writer 完成。这样能确定性地保住短任务的尾部输出，也为日志 tee 提供唯一写入点。
+`keep` 借鉴的是“有界队列、统一 writer、停止时排空”，不是 tmux 本身。supervisor
+现在持有输出 multiplexer，在所有子进程 PTY 读完后关闭队列并等待 writer 完成，
+从而保住短任务的尾部输出，也为日志 tee 提供唯一写入点。名称补齐只是外观选择，
+当前不复制。
 
-首版不做 PTY。对于仍因 pipe 缓冲的应用，先由应用自己的 unbuffered/flush 选项解决；
-只有实际遇到大量无法配置的程序时，再评估原生 PTY backend。
+当前只使用 output-only PTY。完整交互、stdin 转发、终端 resize 和 attach 仍不属于首版。
 
 ### 不采用 dockerize 的输出模型
 
@@ -91,7 +87,7 @@ dockerize 只有一个主命令，直接继承父进程 stdin/stdout/stderr，�
 - `../third-party/dockerize/README.md:6-22`、`:73-126`，`../third-party/dockerize/main.go:247-258`、`:371-380`，
   `../third-party/dockerize/tail.go:13-69`：tail 文件的接口、启动和 follow/reopen。
 
-因此没有必要把文件监听、轮询或 reopen 机制移植到 `keep`；在现有 pipe 读取点 tee
+因此没有必要把文件监听、轮询或 reopen 机制移植到 `keep`；在现有 PTY 读取点 tee
 即可。
 
 ## 2. 日志落盘
@@ -196,8 +192,8 @@ Overmind 的 `can-die` 也不应照搬。它允许指定进程退出而不打断
 
 ## 建议实施顺序
 
-1. 先把输出 reader 纳入 supervisor 生命周期：有界队列、单 writer、EOF 排空，并补
-   短 task 尾部输出回归测试。
+1. [已完成] 把输出 reader 纳入 supervisor 生命周期：有界队列、单 writer、EOF
+   排空，并补短 task 尾部输出回归测试。
 2. 在同一个输出 writer 增加 `log_directory` tee，不另建 tailer 或日志服务。
 3. 更新 README/configuration：说明默认终端输出、日志文件名，以及 `mode: task`。
 4. 不改 task 状态机；只补缺失的用户文档和必要回归测试。
@@ -206,7 +202,7 @@ Overmind 的 `can-die` 也不应照搬。它允许指定进程退出而不打断
 
 每项用户可见行为都应从编译后的 `keep` 二进制测试：
 
-1. 两个 service 同时写 stdout/stderr，终端每行都带正确且对齐的进程名前缀，原始流
+1. 两个 service 同时写 stdout/stderr，终端每行都带正确的进程名前缀，原始流
    仍分别进入 `keep` 的 stdout/stderr。
 2. task 快速写多行、非 UTF-8、超长行以及无结尾换行后退出；`keep start` 返回前所有
    输出都已排空。

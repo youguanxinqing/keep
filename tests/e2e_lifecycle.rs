@@ -550,7 +550,12 @@ processes:
         root.path(),
         &["start", "--config", "bytes"],
     );
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert!(
         output
             .stdout
@@ -558,6 +563,94 @@ processes:
             .any(|window| window == b"binary | after"),
         "{}",
         String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+#[test]
+fn short_task_drains_all_output_before_keep_exits() {
+    let config = TempDir::new().unwrap();
+    let runtime = TempDir::new_in("/tmp").unwrap();
+    let root = TempDir::new().unwrap();
+    fs::write(
+        config.path().join("burst.yaml"),
+        format!(
+            r#"
+version: 1
+project:
+  id: burst
+  path: {}
+processes:
+  burst:
+    mode: task
+    command: "i=1; while [ $i -le 20000 ]; do echo line-$i; i=$((i + 1)); done"
+"#,
+            root.path().display()
+        ),
+    )
+    .unwrap();
+
+    let output = keep(
+        config.path(),
+        runtime.path(),
+        root.path(),
+        &["start", "--config", "burst"],
+    );
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let lines = output
+        .stdout
+        .split(|byte| *byte == b'\n')
+        .filter(|line| line.starts_with(b"burst | line-"))
+        .count();
+    assert_eq!(lines, 20_000, "last output lines were lost");
+}
+
+#[test]
+fn default_service_streams_output_from_terminal_aware_programs() {
+    let config = TempDir::new().unwrap();
+    let runtime = TempDir::new_in("/tmp").unwrap();
+    let root = TempDir::new().unwrap();
+    let unrelated = TempDir::new().unwrap();
+    fs::write(
+        config.path().join("terminal-aware.yaml"),
+        format!(
+            r#"
+version: 1
+project:
+  id: terminal-aware
+  path: {}
+processes:
+  app:
+    command: |
+      if [ -t 1 ]; then
+        echo visible-without-extra-flags
+      fi
+      trap 'exit 0' TERM INT HUP
+      while :; do sleep 1; done
+"#,
+            root.path().display()
+        ),
+    )
+    .unwrap();
+
+    let running = spawn(
+        config.path(),
+        runtime.path(),
+        unrelated.path(),
+        "terminal-aware",
+    );
+
+    assert!(
+        wait_for(Duration::from_secs(5), || running
+            .logs()
+            .contains("app | visible-without-extra-flags")),
+        "{}",
+        running.logs()
     );
 }
 

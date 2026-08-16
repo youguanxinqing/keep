@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
+use std::fs::{self, File};
 use std::io::IsTerminal;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::fs::PermissionsExt;
@@ -8,11 +8,12 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
 use std::sync::Arc;
-use std::thread;
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use nix::pty::{openpty, Winsize};
 use nix::sys::signal::{self, Signal};
 use nix::unistd::{setsid, Pid};
 use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGTERM};
@@ -30,6 +31,7 @@ use crate::runtime::{
 const LOOP_INTERVAL: Duration = Duration::from_millis(25);
 const CONTROL_IO_TIMEOUT: Duration = Duration::from_millis(500);
 const MAX_CONTROL_REQUEST_BYTES: usize = 16 * 1024;
+const OUTPUT_QUEUE_CAPACITY: usize = 128;
 
 #[derive(Debug, Error)]
 pub enum SupervisorError {
@@ -108,6 +110,12 @@ struct ManagedProcess {
     probe_cancel: Option<Arc<AtomicBool>>,
 }
 
+struct OutputLine {
+    prefix: Arc<[u8]>,
+    line: Vec<u8>,
+    stderr: bool,
+}
+
 impl ManagedProcess {
     fn status(&self) -> ProcessStatus {
         ProcessStatus {
@@ -136,11 +144,14 @@ pub struct Supervisor {
     stop_requested: Arc<AtomicBool>,
     probe_sender: Sender<ProbeEvent>,
     probe_receiver: Receiver<ProbeEvent>,
+    output_sender: Option<SyncSender<OutputLine>>,
+    output_writer: Option<JoinHandle<()>>,
 }
 
 impl Drop for Supervisor {
     fn drop(&mut self) {
         self.shutdown_all();
+        self.finish_output();
     }
 }
 
@@ -186,6 +197,8 @@ impl Supervisor {
                 .map_err(SupervisorError::SignalHandler)?;
         }
         let (probe_sender, probe_receiver) = mpsc::channel();
+        let (output_sender, output_receiver) = mpsc::sync_channel(OUTPUT_QUEUE_CAPACITY);
+        let output_writer = thread::spawn(move || write_output(output_receiver));
 
         Ok(Self {
             config,
@@ -197,12 +210,15 @@ impl Supervisor {
             stop_requested,
             probe_sender,
             probe_receiver,
+            output_sender: Some(output_sender),
+            output_writer: Some(output_writer),
         })
     }
 
     pub fn run(mut self) -> Result<(), SupervisorError> {
         let result = self.run_loop();
         self.shutdown_all();
+        self.finish_output();
         result
     }
 
@@ -323,6 +339,11 @@ impl Supervisor {
     }
 
     fn start_process(&mut self, index: usize) -> Result<(), SupervisorError> {
+        let output_sender = self
+            .output_sender
+            .as_ref()
+            .expect("output remains active while the supervisor runs")
+            .clone();
         let process = &mut self.processes[index];
         process.state = ProcessState::Starting;
         process.detail = Some("spawning command".into());
@@ -342,32 +363,43 @@ impl Supervisor {
             .unwrap_or_else(|| self.root.clone());
 
         let mut command = Command::new("sh");
+        let (stdout, stdout_reader) =
+            terminal_stream().map_err(|source| SupervisorError::StartProcess {
+                process: process.name.clone(),
+                source,
+            })?;
+        let (stderr, stderr_reader) =
+            terminal_stream().map_err(|source| SupervisorError::StartProcess {
+                process: process.name.clone(),
+                source,
+            })?;
         command
             .args(["-c", &process.config.command])
             .current_dir(working_directory)
             .envs(&process.environment)
             .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stdout(stdout)
+            .stderr(stderr);
         unsafe {
             command.pre_exec(|| {
                 setsid().map_err(std::io::Error::other)?;
                 Ok(())
             });
         }
-        let mut child = command
+        let child = command
             .spawn()
             .map_err(|source| SupervisorError::StartProcess {
                 process: process.name.clone(),
                 source,
             })?;
         let pid = child.id();
-        if let Some(stdout) = child.stdout.take() {
-            forward_output(process.name.clone(), stdout, false);
-        }
-        if let Some(stderr) = child.stderr.take() {
-            forward_output(process.name.clone(), stderr, true);
-        }
+        forward_output(
+            process.name.clone(),
+            stdout_reader,
+            false,
+            output_sender.clone(),
+        );
+        forward_output(process.name.clone(), stderr_reader, true, output_sender);
         process.pid = Some(pid);
         process.child = Some(child);
         process.next_restart = None;
@@ -787,6 +819,13 @@ impl Supervisor {
         }
     }
 
+    fn finish_output(&mut self) {
+        self.output_sender.take();
+        if let Some(writer) = self.output_writer.take() {
+            let _ = writer.join();
+        }
+    }
+
     fn stop_settings(&self, index: usize) -> (Signal, Duration) {
         let stop = self.processes[index].config.stop.as_ref().or(self
             .config
@@ -1002,7 +1041,7 @@ fn register_instance(
     Ok((listener, registration))
 }
 
-fn forward_output<R>(name: String, reader: R, stderr: bool)
+fn forward_output<R>(name: String, reader: R, stderr: bool, sender: SyncSender<OutputLine>)
 where
     R: std::io::Read + Send + 'static,
 {
@@ -1013,31 +1052,60 @@ where
         } else {
             std::io::stdout().is_terminal()
         };
-        let prefix = if terminal {
+        let prefix: Arc<[u8]> = if terminal {
             format!("\x1b[1;{color}m{name}\x1b[0m | ")
         } else {
             format!("{name} | ")
-        };
+        }
+        .into_bytes()
+        .into();
         let mut reader = BufReader::new(reader);
         let mut line = Vec::new();
         loop {
             line.clear();
-            let Ok(read) = reader.read_until(b'\n', &mut line) else {
-                break;
+            let done = match reader.read_until(b'\n', &mut line) {
+                Ok(0) => break,
+                Ok(_) => false,
+                Err(_) if line.is_empty() => break,
+                Err(_) => true,
             };
-            if read == 0 {
-                break;
-            }
-            let result = if stderr {
-                write_prefixed_line(std::io::stderr().lock(), prefix.as_bytes(), &line)
-            } else {
-                write_prefixed_line(std::io::stdout().lock(), prefix.as_bytes(), &line)
-            };
-            if result.is_err() {
+            if sender
+                .send(OutputLine {
+                    prefix: Arc::clone(&prefix),
+                    line: std::mem::take(&mut line),
+                    stderr,
+                })
+                .is_err()
+                || done
+            {
                 break;
             }
         }
     });
+}
+
+fn write_output(receiver: Receiver<OutputLine>) {
+    while let Ok(output) = receiver.recv() {
+        let result = if output.stderr {
+            write_prefixed_line(std::io::stderr().lock(), &output.prefix, &output.line)
+        } else {
+            write_prefixed_line(std::io::stdout().lock(), &output.prefix, &output.line)
+        };
+        if result.is_err() {
+            break;
+        }
+    }
+}
+
+fn terminal_stream() -> std::io::Result<(Stdio, File)> {
+    let size = Winsize {
+        ws_row: 24,
+        ws_col: 120,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    let terminal = openpty(Some(&size), None).map_err(std::io::Error::from)?;
+    Ok((Stdio::from(terminal.slave), File::from(terminal.master)))
 }
 
 fn write_prefixed_line(mut output: impl Write, prefix: &[u8], line: &[u8]) -> std::io::Result<()> {

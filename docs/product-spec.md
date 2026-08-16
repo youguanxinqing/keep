@@ -140,21 +140,24 @@ Shutdown behavior:
 
 The built-in supervisor launches commands directly and captures stdout and stderr.
 `keep start` stays in the foreground, prefixes output with the process name,
-and owns the lifetime of all child process groups. A second terminal controls
-the supervisor through its Unix socket.
+and owns the lifetime of all child process groups. Child output uses lightweight
+native pseudo-terminals so terminal-aware programs flush normally without a tmux
+backend. A bounded queue serializes process output and is drained before `keep`
+exits. A second terminal controls the supervisor through its Unix socket.
 
 Version 1 limitations are intentional:
 
 - no tmux backend;
-- no native PTY or interactive attachment;
+- no interactive stdin or attachment;
 - no daemon mode;
 - no persistent log archive;
 - no remote TCP control socket;
 - no multi-instance scaling;
 - no implicit port allocation.
 
-Some child programs disable colored output when stdout is a pipe. `keep` passes
-through ANSI sequences that are emitted, but it does not globally force color.
+The pseudo-terminals are output-only: child stdin remains closed and `keep` does
+not emulate a fully interactive terminal. ANSI sequences emitted by children are
+passed through unchanged.
 
 ## Procfile compatibility
 

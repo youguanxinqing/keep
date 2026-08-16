@@ -103,6 +103,9 @@ cd ~/projects/shop
 keep start
 ```
 
+子进程的 stdout/stderr 默认实时显示，并带进程名前缀，例如 `api | listening on :3000`。
+keep 使用轻量的原生 PTY 保留 Python 等终端感知程序的正常刷新行为，不依赖 tmux。
+
 也可以显式指定配置，或只启动某个进程及其依赖：
 
 ```bash
