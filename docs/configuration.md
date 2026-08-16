@@ -89,6 +89,7 @@ processes:
   api:
     command: npm run dev
     mode: service
+    color: red
     working_directory: services/api
     env_files:
       - services/api/.env
@@ -196,6 +197,7 @@ project:
 | --- | --- | --- | --- | --- |
 | `command` | 字符串 | 是 | 无 | 使用 POSIX `sh -c` 执行的非空命令。 |
 | `mode` | 枚举 | 否 | `service` | `service` 是长期服务；`task` 是成功退出的一次性任务。 |
+| `color` | 颜色名或整数 | 否 | 自动分配 | 日志前缀颜色，支持颜色名或 xterm `0..255` 色号。 |
 | `depends_on` | 对象 | 否 | `{}` | 依赖进程名到依赖条件的映射。 |
 | `readiness` | 对象 | 否 | 无 | 服务的就绪检测；`task` 不能配置此字段。 |
 | `restart` | 对象 | 否 | `defaults.restart` | 该进程的重启设置。字段与 `defaults.restart` 相同。 |
@@ -212,6 +214,33 @@ project:
 
 环境文件不存在或内容无效时，进程不会启动。`command` 由 shell 展开环境变量；
 就绪检测的 `target`、`tls_ca` 和 header 值支持 `${NAME}`。
+
+### 日志颜色
+
+未配置 `color` 时，keep 会按照 YAML 中的进程顺序，从 10 种默认颜色中循环分配；
+显式配置的颜色会从自动调色板中跳过。颜色基于完整配置分配，因此只启动部分进程或
+重启进程时，同一进程仍使用相同颜色。颜色数量用尽后可能重复。
+
+常用颜色可以直接使用名称：`red`、`green`、`yellow`、`blue`、`magenta`、`cyan`。
+需要更精确地适配终端主题时，也可以填写 `0` 到 `255` 的 xterm 色号：
+
+```yaml
+processes:
+  api:
+    command: npm run dev
+    color: red
+  worker:
+    command: npm run worker
+    color: 208
+```
+
+颜色只作用于 `api |` 这样的进程名前缀，不修改日志正文。stdout 和 stderr 使用同一种
+进程颜色；输出到文件或管道时，keep 不会为前缀写入 ANSI 控制符。需要临时关闭终端
+颜色时运行：
+
+```bash
+NO_COLOR=1 keep start
+```
 
 ## `depends_on`
 

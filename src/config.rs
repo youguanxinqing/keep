@@ -324,6 +324,8 @@ pub struct ProcessConfig {
     #[serde(default)]
     pub mode: ProcessMode,
     #[serde(default)]
+    pub color: Option<ProcessColor>,
+    #[serde(default)]
     pub depends_on: IndexMap<String, DependencyCondition>,
     #[serde(default)]
     pub readiness: Option<ReadinessConfig>,
@@ -337,6 +339,88 @@ pub struct ProcessConfig {
     pub env: BTreeMap<String, String>,
     #[serde(default)]
     pub env_files: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum ProcessColor {
+    Named(NamedProcessColor),
+    Xterm(u8),
+}
+
+impl ProcessColor {
+    pub(crate) fn xterm_code(self) -> u8 {
+        match self {
+            Self::Named(color) => color as u8,
+            Self::Xterm(color) => color,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ProcessColor {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct ColorVisitor;
+
+        impl serde::de::Visitor<'_> for ColorVisitor {
+            type Value = ProcessColor;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str(
+                    "red, green, yellow, blue, magenta, cyan, or an xterm color code from 0 to 255",
+                )
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                let color = match value {
+                    "red" => NamedProcessColor::Red,
+                    "green" => NamedProcessColor::Green,
+                    "yellow" => NamedProcessColor::Yellow,
+                    "blue" => NamedProcessColor::Blue,
+                    "magenta" => NamedProcessColor::Magenta,
+                    "cyan" => NamedProcessColor::Cyan,
+                    _ => return Err(E::invalid_value(serde::de::Unexpected::Str(value), &self)),
+                };
+                Ok(Self::Value::Named(color))
+            }
+
+            fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                u8::try_from(value)
+                    .map(Self::Value::Xterm)
+                    .map_err(|_| E::invalid_value(serde::de::Unexpected::Unsigned(value), &self))
+            }
+
+            fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                u8::try_from(value)
+                    .map(Self::Value::Xterm)
+                    .map_err(|_| E::invalid_value(serde::de::Unexpected::Signed(value), &self))
+            }
+        }
+
+        deserializer.deserialize_any(ColorVisitor)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum NamedProcessColor {
+    Red = 1,
+    Green = 2,
+    Yellow = 3,
+    Blue = 4,
+    Magenta = 5,
+    Cyan = 6,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]

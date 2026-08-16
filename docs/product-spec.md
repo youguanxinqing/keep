@@ -142,10 +142,12 @@ Shutdown behavior:
 
 The built-in supervisor launches commands directly and captures stdout and stderr.
 `keep start` stays in the foreground, prefixes output with the process name,
-and owns the lifetime of all child process groups. Child output uses lightweight
-native pseudo-terminals so terminal-aware programs flush normally without a tmux
-backend. A bounded queue serializes process output and is drained before `keep`
-exits. A second terminal controls the supervisor through its Unix socket.
+and owns the lifetime of all child process groups. On a terminal, process prefixes
+receive distinct colors in YAML order and may override the color per process;
+redirected output and `NO_COLOR` remain plain. Child output uses lightweight native
+pseudo-terminals so terminal-aware programs flush normally without a tmux backend.
+A bounded queue serializes process output and is drained before `keep` exits. A
+second terminal controls the supervisor through its Unix socket.
 
 Version 1 limitations are intentional:
 

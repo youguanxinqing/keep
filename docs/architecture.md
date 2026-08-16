@@ -74,9 +74,11 @@ supervisor. Probe tasks never directly start dependent processes.
 ### Output multiplexer
 
 Reads stdout and stderr without blocking the supervisor, preserves emitted ANSI
-bytes, and prefixes complete lines. Reader threads send lines through one bounded
-queue to a single writer; shutdown closes the queue and waits until pending output
-has been written. A slow control client must not block child output.
+bytes, and prefixes complete lines. Prefix colors are assigned once when the
+supervisor is created, with optional per-process overrides; non-terminal output and
+`NO_COLOR` use plain prefixes. Reader threads send lines through one bounded queue
+to a single writer; shutdown closes the queue and waits until pending output has
+been written. A slow control client must not block child output.
 
 ### Runtime registry
 

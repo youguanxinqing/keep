@@ -63,6 +63,7 @@ processes:
 
   api:
     command: npm run dev
+    color: red                  # 可选：突出重要进程
     depends_on:
       database: ready
       migrate: completed_successfully
@@ -105,6 +106,8 @@ keep start
 
 子进程的 stdout/stderr 默认实时显示，并带进程名前缀，例如 `api | listening on :3000`。
 keep 使用轻量的原生 PTY 保留 Python 等终端感知程序的正常刷新行为，不依赖 tmux。
+终端中的进程名前缀会自动使用不同颜色；重要进程可配置 `color: red`，也可使用
+`0` 到 `255` 的 xterm 色号。重定向输出或设置 `NO_COLOR=1` 时不会输出颜色控制符。
 
 也可以显式指定配置，或只启动某个进程及其依赖：
 

@@ -1,6 +1,7 @@
 use std::fs::{self, File};
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Output, Stdio};
+use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -122,10 +123,127 @@ processes:
     .expect("configuration fixture");
 }
 
+fn start_in_terminal(
+    config_dir: &Path,
+    runtime_dir: &Path,
+    working_dir: &Path,
+    project: &str,
+    no_color: bool,
+) -> (ExitStatus, Vec<u8>) {
+    let terminal = nix::pty::openpty(None, None).expect("terminal");
+    let stderr = terminal.slave.try_clone().expect("terminal stderr");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_keep"));
+    command
+        .args(["start", "--config", project])
+        .env("KEEP_CONFIG_DIR", config_dir)
+        .env("KEEP_RUNTIME_DIR", runtime_dir)
+        .current_dir(working_dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(terminal.slave))
+        .stderr(Stdio::from(stderr));
+    if no_color {
+        command.env("NO_COLOR", "1");
+    } else {
+        command.env_remove("NO_COLOR");
+    }
+    let mut child = command.spawn().expect("keep start should execute");
+    drop(command);
+    let reader = thread::spawn(move || {
+        let mut output = Vec::new();
+        let _ = File::from(terminal.master).read_to_end(&mut output);
+        output
+    });
+    let status = child.wait().expect("keep start status");
+    let output = reader.join().expect("terminal reader");
+    (status, output)
+}
+
 const LONG_RUNNING_PROCESS: &str = r#"    command: |
       trap 'exit 0' TERM INT HUP
       echo online
       while :; do sleep 1; done"#;
+
+#[test]
+fn start_assigns_distinct_colors_and_honors_process_overrides() {
+    let config_dir = TempDir::new().expect("configuration directory");
+    let runtime_dir = runtime_temp_dir();
+    let project_root = TempDir::new().expect("project root");
+    write_service_config(
+        config_dir.path(),
+        project_root.path(),
+        "colors",
+        r#"  critical:
+    command: "printf 'critical-log\\n'"
+    mode: task
+    color: red
+  api:
+    command: "printf 'api-log\\n'"
+    mode: task
+  worker:
+    command: "printf 'worker-log\\n'"
+    mode: task
+  metrics:
+    command: "printf 'metrics-log\\n'"
+    mode: task
+    color: 208"#,
+    );
+
+    let (status, output) = start_in_terminal(
+        config_dir.path(),
+        runtime_dir.path(),
+        project_root.path(),
+        "colors",
+        false,
+    );
+    let output = String::from_utf8_lossy(&output);
+
+    assert!(status.success(), "{output}");
+    assert!(
+        output.contains("\x1b[1;38;5;1mcritical\x1b[0m | critical-log"),
+        "{output:?}"
+    );
+    assert!(
+        output.contains("\x1b[1;38;5;2mapi\x1b[0m | api-log"),
+        "{output:?}"
+    );
+    assert!(
+        output.contains("\x1b[1;38;5;3mworker\x1b[0m | worker-log"),
+        "{output:?}"
+    );
+    assert!(
+        output.contains("\x1b[1;38;5;208mmetrics\x1b[0m | metrics-log"),
+        "{output:?}"
+    );
+}
+
+#[test]
+fn start_honors_no_color_in_a_terminal() {
+    let config_dir = TempDir::new().expect("configuration directory");
+    let runtime_dir = runtime_temp_dir();
+    let project_root = TempDir::new().expect("project root");
+    write_service_config(
+        config_dir.path(),
+        project_root.path(),
+        "plain",
+        r#"  api:
+    command: "printf 'api-log\\n'"
+    mode: task
+    color: red"#,
+    );
+
+    let (status, output) = start_in_terminal(
+        config_dir.path(),
+        runtime_dir.path(),
+        project_root.path(),
+        "plain",
+        true,
+    );
+    let output = String::from_utf8_lossy(&output);
+
+    assert!(status.success(), "{output}");
+    assert!(output.contains("api | api-log"), "{output:?}");
+    assert!(!output.contains("\x1b["), "{output:?}");
+}
 
 #[test]
 fn start_runs_dependencies_and_global_ls_and_stop_work_from_another_directory() {
@@ -243,6 +361,11 @@ fn stop_can_target_one_process_without_stopping_its_sibling() {
             .logs()
             .contains("api | online")),
         "supervisor logs:\n{}",
+        supervisor.logs()
+    );
+    assert!(
+        !supervisor.logs().contains("\x1b["),
+        "redirected output must not contain ANSI escapes: {:?}",
         supervisor.logs()
     );
 

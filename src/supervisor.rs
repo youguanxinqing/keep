@@ -34,6 +34,7 @@ const CONTROL_IO_TIMEOUT: Duration = Duration::from_millis(500);
 const MAX_CONTROL_REQUEST_BYTES: usize = 16 * 1024;
 const OUTPUT_QUEUE_CAPACITY: usize = 128;
 const PROCESS_GROUP_EXIT_TIMEOUT: Duration = Duration::from_secs(1);
+const AUTO_PROCESS_COLORS: [u8; 10] = [2, 3, 4, 5, 6, 42, 130, 103, 129, 108];
 
 #[derive(Debug, Error)]
 pub enum SupervisorError {
@@ -100,6 +101,7 @@ impl Drop for Registration {
 struct ManagedProcess {
     name: String,
     config: ProcessConfig,
+    color: u8,
     environment: BTreeMap<String, String>,
     enabled: bool,
     child: Option<Child>,
@@ -161,14 +163,38 @@ impl Supervisor {
     pub fn new(config: LoadedConfig, selected: &[String]) -> Result<Self, SupervisorError> {
         let root = project_root(&config)?;
         let enabled = selected_process_closure(&config, selected)?;
+        let explicit_colors = config
+            .processes
+            .values()
+            .filter_map(|process| process.color.map(|color| color.xterm_code()))
+            .collect::<BTreeSet<_>>();
+        let available_colors = AUTO_PROCESS_COLORS
+            .into_iter()
+            .filter(|color| !explicit_colors.contains(color))
+            .collect::<Vec<_>>();
+        let available_colors = if available_colors.is_empty() {
+            AUTO_PROCESS_COLORS.as_slice()
+        } else {
+            available_colors.as_slice()
+        };
+        let mut automatic_color = 0;
         let mut processes = Vec::with_capacity(config.processes.len());
         for (name, process) in &config.processes {
             let is_enabled = enabled.contains(name);
             let environment =
                 load_environment(&root, &config.env_files, &process.env_files, &process.env)?;
+            let color = process
+                .color
+                .map(|color| color.xterm_code())
+                .unwrap_or_else(|| {
+                    let color = available_colors[automatic_color % available_colors.len()];
+                    automatic_color += 1;
+                    color
+                });
             processes.push(ManagedProcess {
                 name: name.clone(),
                 config: process.clone(),
+                color,
                 environment,
                 enabled: is_enabled,
                 child: None,
@@ -397,11 +423,18 @@ impl Supervisor {
         let pid = child.id();
         forward_output(
             process.name.clone(),
+            process.color,
             stdout_reader,
             false,
             output_sender.clone(),
         );
-        forward_output(process.name.clone(), stderr_reader, true, output_sender);
+        forward_output(
+            process.name.clone(),
+            process.color,
+            stderr_reader,
+            true,
+            output_sender,
+        );
         process.pid = Some(pid);
         process.child = Some(child);
         process.next_restart = None;
@@ -1046,19 +1079,24 @@ fn register_instance(
     Ok((listener, registration))
 }
 
-fn forward_output<R>(name: String, reader: R, stderr: bool, sender: SyncSender<OutputLine>)
-where
+fn forward_output<R>(
+    name: String,
+    color: u8,
+    reader: R,
+    stderr: bool,
+    sender: SyncSender<OutputLine>,
+) where
     R: std::io::Read + Send + 'static,
 {
     thread::spawn(move || {
-        let color = 31 + name.bytes().fold(0_u8, u8::wrapping_add) % 6;
-        let terminal = if stderr {
-            std::io::stderr().is_terminal()
-        } else {
-            std::io::stdout().is_terminal()
-        };
+        let terminal = std::env::var_os("NO_COLOR").is_none()
+            && if stderr {
+                std::io::stderr().is_terminal()
+            } else {
+                std::io::stdout().is_terminal()
+            };
         let prefix: Arc<[u8]> = if terminal {
-            format!("\x1b[1;{color}m{name}\x1b[0m | ")
+            format!("\x1b[1;38;5;{color}m{name}\x1b[0m | ")
         } else {
             format!("{name} | ")
         }
