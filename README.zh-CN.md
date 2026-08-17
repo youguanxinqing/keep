@@ -10,7 +10,13 @@
 
 ## 安装
 
-需要 Rust 1.85+ 和 [just](https://github.com/casey/just)。克隆仓库并进入目录后运行：
+使用 Homebrew：
+
+```bash
+brew install youguanxinqing/tap/keep
+```
+
+或从源码构建。需要 Rust 1.85+ 和 [just](https://github.com/casey/just)。克隆仓库并进入目录后运行：
 
 ```bash
 cd keep

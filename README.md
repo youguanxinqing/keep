@@ -11,8 +11,15 @@ OpenSSL, or another process manager. macOS and Linux are currently supported.
 
 ## Installation
 
-Requires Rust 1.85+ and [just](https://github.com/casey/just). Clone the
-repository, enter the directory, and run:
+With Homebrew:
+
+```bash
+brew install youguanxinqing/tap/keep
+```
+
+Or build from source. Requires Rust 1.85+ and
+[just](https://github.com/casey/just). Clone the repository, enter the
+directory, and run:
 
 ```bash
 cd keep
