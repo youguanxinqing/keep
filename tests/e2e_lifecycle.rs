@@ -211,7 +211,7 @@ processes:
     assert!(
         stdout.lines().any(|line| {
             let fields = line.split_whitespace().collect::<Vec<_>>();
-            fields.get(3) == Some(&"ready") && fields.get(5) == Some(&"1")
+            fields.get(3) == Some(&"running") && fields.get(5) == Some(&"1")
         }),
         "{stdout}\n{}",
         running.logs()

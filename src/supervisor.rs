@@ -509,7 +509,7 @@ impl Supervisor {
                 self.probe_sender.clone(),
             );
         } else {
-            process.state = ProcessState::Ready;
+            process.state = ProcessState::Running;
             process.detail = None;
         }
         Ok(())
@@ -525,7 +525,7 @@ impl Supervisor {
                     let managed = self.process_mut(&process)?;
                     if managed.generation == generation && managed.state == ProcessState::Checking {
                         managed.probe_cancel = None;
-                        managed.state = ProcessState::Ready;
+                        managed.state = ProcessState::Running;
                         managed.detail = None;
                         system_log(format_args!("readiness passed for '{}'", managed.name));
                     }
@@ -560,7 +560,7 @@ impl Supervisor {
         for (index, process) in self.processes.iter_mut().enumerate() {
             if !matches!(
                 process.state,
-                ProcessState::Running | ProcessState::Checking | ProcessState::Ready
+                ProcessState::Running | ProcessState::Checking
             ) {
                 continue;
             }
@@ -991,7 +991,7 @@ fn condition_satisfied(state: ProcessState, condition: DependencyCondition) -> b
     match condition {
         DependencyCondition::Ready => matches!(
             state,
-            ProcessState::Ready | ProcessState::Running | ProcessState::Completed
+            ProcessState::Running | ProcessState::Completed
         ),
         DependencyCondition::CompletedSuccessfully => state == ProcessState::Completed,
     }

@@ -338,7 +338,7 @@ fn start_runs_dependencies_and_global_ls_and_stop_work_from_another_directory() 
                 .any(|columns| {
                     columns.first() == Some(&"shop")
                         && columns.get(1) == Some(&"api")
-                        && columns.get(3) == Some(&"ready")
+                        && columns.get(3) == Some(&"running")
                 })
     });
     assert!(listed, "supervisor logs:\n{}", supervisor.logs());
@@ -366,7 +366,7 @@ fn start_runs_dependencies_and_global_ls_and_stop_work_from_another_directory() 
     assert_eq!(prepare.find("prepare"), Some(process_column), "{stdout}");
     assert_eq!(api.find("api"), Some(process_column), "{stdout}");
     assert_eq!(prepare.find("completed"), Some(status_column), "{stdout}");
-    assert_eq!(api.find("ready"), Some(status_column), "{stdout}");
+    assert_eq!(api.find("running"), Some(status_column), "{stdout}");
     assert_eq!(&prepare[root_column..], &api[root_column..], "{stdout}");
     assert!(
         wait_for(Duration::from_secs(2), || {
@@ -475,7 +475,7 @@ fn stop_can_target_one_process_without_stopping_its_sibling() {
         })
     };
     assert!(has_state("worker", "stopped"), "{stdout}");
-    assert!(has_state("api", "ready"), "{stdout}");
+    assert!(has_state("api", "running"), "{stdout}");
 
     let stop_project = keep(
         config_dir.path(),

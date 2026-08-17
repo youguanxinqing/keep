@@ -163,7 +163,7 @@ processes:
         let fields = line.split_whitespace().collect::<Vec<_>>();
         fields.first() == Some(&"shop")
             && fields.get(1) == Some(&"api")
-            && fields.get(3) == Some(&"ready")
+            && fields.get(3) == Some(&"running")
             && fields.get(5) == Some(&"0")
     }));
 

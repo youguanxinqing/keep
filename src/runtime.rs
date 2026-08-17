@@ -157,7 +157,6 @@ pub enum ProcessState {
     Starting,
     Running,
     Checking,
-    Ready,
     Completed,
     Failed,
     Restarting,
@@ -173,7 +172,6 @@ impl std::fmt::Display for ProcessState {
             Self::Starting => "starting",
             Self::Running => "running",
             Self::Checking => "checking",
-            Self::Ready => "ready",
             Self::Completed => "completed",
             Self::Failed => "failed",
             Self::Restarting => "restarting",
@@ -393,7 +391,7 @@ mod tests {
                 processes: vec![ProcessStatus {
                     name: "api".into(),
                     pid: Some(43),
-                    state: ProcessState::Ready,
+                    state: ProcessState::Running,
                     detail: None,
                     restart_count: 0,
                     started_at_unix_seconds: None,
@@ -406,7 +404,7 @@ mod tests {
             serde_json::from_slice(&encoded).expect("response should deserialize");
         assert_eq!(
             decoded.project.expect("project status").processes[0].state,
-            ProcessState::Ready
+            ProcessState::Running
         );
     }
 
