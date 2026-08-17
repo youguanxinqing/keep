@@ -182,6 +182,26 @@ impl std::fmt::Display for ProcessState {
     }
 }
 
+impl std::str::FromStr for ProcessState {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Ok(match value {
+            "pending" => Self::Pending,
+            "blocked" => Self::Blocked,
+            "starting" => Self::Starting,
+            "running" => Self::Running,
+            "checking" => Self::Checking,
+            "completed" => Self::Completed,
+            "failed" => Self::Failed,
+            "restarting" => Self::Restarting,
+            "stopping" => Self::Stopping,
+            "stopped" => Self::Stopped,
+            other => return Err(format!("unknown state '{other}'")),
+        })
+    }
+}
+
 pub fn runtime_directory() -> Result<PathBuf, RuntimeError> {
     let path = if let Some(override_path) = env::var_os("KEEP_RUNTIME_DIR") {
         PathBuf::from(override_path)

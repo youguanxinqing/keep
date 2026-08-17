@@ -1,6 +1,7 @@
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use clap::{Args, Parser, Subcommand};
 use thiserror::Error;
@@ -12,7 +13,7 @@ use crate::procfile::{convert_procfile, load_procfile, ProcfileError};
 use crate::resolver::{inspect_git, resolve_current};
 use crate::runtime::{
     find_metadata, instance_directory, list_metadata, runtime_directory, send_request,
-    try_project_lock, ControlRequest, InstanceMetadata, ProjectStatus, RuntimeError,
+    try_project_lock, ControlRequest, InstanceMetadata, ProcessState, ProjectStatus, RuntimeError,
     PROTOCOL_VERSION,
 };
 use crate::supervisor::{Supervisor, SupervisorError};
@@ -57,6 +58,28 @@ pub enum CliError {
     },
     #[error("cannot encode configuration template: {0}")]
     EncodeConfigTemplate(serde_json::Error),
+    #[error("waiting on a whole project is not supported; pass {0}/PROCESS")]
+    WaitNeedsProcess(String),
+    #[error("no process named '{process}' in project '{project}'; known processes: {known}")]
+    UnknownProcess {
+        project: String,
+        process: String,
+        known: String,
+    },
+    #[error("'{target}' is {current}{detail}, a terminal state; it cannot become {desired} without `keep start` or `keep restart`")]
+    WaitUnreachable {
+        target: String,
+        desired: ProcessState,
+        current: ProcessState,
+        detail: String,
+    },
+    #[error("timed out after {timeout}s waiting for '{target}' to be {desired}; last seen: {last}")]
+    WaitTimeout {
+        target: String,
+        desired: ProcessState,
+        timeout: u64,
+        last: String,
+    },
 }
 
 #[derive(Debug, Parser)]
@@ -87,6 +110,9 @@ enum Command {
     /// Restart running projects or processes.
     #[command(visible_alias = "r")]
     Restart(RestartArgs),
+    /// Block until a process reaches a state (default: running).
+    #[command(visible_alias = "w", after_help = STATE_HELP)]
+    Wait(WaitArgs),
     /// Gracefully shut down one project's supervisor.
     #[command(visible_alias = "q")]
     Quit(QuitArgs),
@@ -132,6 +158,41 @@ struct StopArgs {
 struct RestartArgs {
     /// Project IDs or PROJECT/PROCESS targets. Defaults to the current project.
     targets: Vec<String>,
+}
+
+const STATE_HELP: &str = "\
+States:
+  pending     queued by the supervisor, not started yet
+  blocked     waiting for a dependency to become ready
+  starting    being launched
+  running     up (readiness probe passed, when one is configured)
+  checking    launched; readiness probe still verifying
+  completed   one-shot task exited successfully (terminal)
+  failed      crashed or failed readiness with no restart left (terminal)
+  restarting  crashed or failed readiness; a restart is scheduled
+  stopping    shutting down after a stop request
+  stopped     stopped until started again (terminal)
+
+Exits 0 once the process reaches the state. Exits 1 with an explanation
+when the timeout elapses or the process settles in a terminal state that
+cannot become the requested one.";
+
+#[derive(Debug, Args)]
+struct WaitArgs {
+    /// PROJECT/PROCESS or a bare process name.
+    target: String,
+    /// State to wait for.
+    #[arg(long, short, default_value = "running", value_parser = parse_state)]
+    state: ProcessState,
+    /// Seconds to wait before giving up.
+    #[arg(long, short, default_value_t = 300, value_name = "SECONDS")]
+    timeout: u64,
+}
+
+fn parse_state(value: &str) -> Result<ProcessState, String> {
+    value
+        .parse()
+        .map_err(|error| format!("{error}; see `keep wait --help` for the list"))
 }
 
 #[derive(Debug, Args)]
@@ -243,6 +304,7 @@ pub fn run() -> Result<(), CliError> {
         Command::Status(args) => run_status(args),
         Command::Stop(args) => run_stop(args),
         Command::Restart(args) => run_restart(args),
+        Command::Wait(args) => run_wait(args),
         Command::Quit(args) => run_quit(args),
         Command::Config(args) => run_config(ConfigRepository::from_environment()?, args.command),
         Command::Procfile(args) => run_procfile(args.command),
@@ -453,6 +515,130 @@ fn run_restart(args: RestartArgs) -> Result<(), CliError> {
         println!("restarted {}", format_target(&target));
     }
     Ok(())
+}
+
+enum WaitPoll {
+    Reached(Target),
+    /// The whole project is gone; counts as `stopped` for every process in it.
+    ProjectGone(String),
+    Unreachable {
+        target: Target,
+        current: ProcessState,
+        detail: String,
+    },
+    NotYet(String),
+}
+
+fn run_wait(args: WaitArgs) -> Result<(), CliError> {
+    let runtime = runtime_directory()?;
+    let desired = args.state;
+    let started = Instant::now();
+    let deadline = started + Duration::from_secs(args.timeout);
+    loop {
+        let last = match poll_wait_target(&runtime, &args.target, desired)? {
+            WaitPoll::Reached(target) => {
+                println!(
+                    "{} is {desired} (waited {:.1}s)",
+                    format_target(&target),
+                    started.elapsed().as_secs_f32()
+                );
+                return Ok(());
+            }
+            WaitPoll::ProjectGone(name) if desired == ProcessState::Stopped => {
+                println!("{name} is stopped (project no longer running)");
+                return Ok(());
+            }
+            WaitPoll::ProjectGone(name) => {
+                format!("no running project or process named '{name}'")
+            }
+            WaitPoll::Unreachable {
+                target,
+                current,
+                detail,
+            } => {
+                return Err(CliError::WaitUnreachable {
+                    target: format_target(&target),
+                    desired,
+                    current,
+                    detail,
+                })
+            }
+            WaitPoll::NotYet(seen) => seen,
+        };
+        if Instant::now() >= deadline {
+            return Err(CliError::WaitTimeout {
+                target: args.target,
+                desired,
+                timeout: args.timeout,
+                last,
+            });
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+fn poll_wait_target(
+    runtime: &Path,
+    raw_target: &str,
+    desired: ProcessState,
+) -> Result<WaitPoll, CliError> {
+    let (metadata, target) = match resolve_running_target(runtime, parse_target(raw_target)?) {
+        Ok(resolved) => resolved,
+        // The supervisor may still be booting; keep polling until the deadline.
+        Err(CliError::Runtime(RuntimeError::ProjectNotRunning(name))) => {
+            return Ok(WaitPoll::ProjectGone(name))
+        }
+        Err(error) => return Err(error),
+    };
+    let process = target
+        .process
+        .clone()
+        .ok_or_else(|| CliError::WaitNeedsProcess(target.project.clone()))?;
+    // A dying supervisor leaves stale metadata briefly; retry instead of failing.
+    let project = match query_status(&metadata) {
+        Ok(project) => project,
+        Err(error) => {
+            return Ok(WaitPoll::NotYet(format!(
+                "cannot query project '{}': {error}",
+                target.project
+            )))
+        }
+    };
+    let Some(status) = project
+        .processes
+        .iter()
+        .find(|candidate| candidate.name == process)
+    else {
+        return Err(CliError::UnknownProcess {
+            project: target.project,
+            process,
+            known: project
+                .processes
+                .iter()
+                .map(|process| process.name.clone())
+                .collect::<Vec<_>>()
+                .join(", "),
+        });
+    };
+    let detail = status
+        .detail
+        .as_ref()
+        .map(|detail| format!(" ({detail})"))
+        .unwrap_or_default();
+    if status.state == desired {
+        Ok(WaitPoll::Reached(target))
+    } else if matches!(
+        status.state,
+        ProcessState::Failed | ProcessState::Stopped | ProcessState::Completed
+    ) {
+        Ok(WaitPoll::Unreachable {
+            target,
+            current: status.state,
+            detail,
+        })
+    } else {
+        Ok(WaitPoll::NotYet(format!("{}{detail}", status.state)))
+    }
 }
 
 fn run_quit(args: QuitArgs) -> Result<(), CliError> {

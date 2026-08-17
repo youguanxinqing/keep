@@ -507,3 +507,114 @@ processes:
         "database\napi\ndatabase\n"
     );
 }
+
+#[test]
+fn wait_follows_process_states_and_reports_timeouts() {
+    let config_dir = TempDir::new().unwrap();
+    let runtime_dir = runtime_temp_dir();
+    let project_root = TempDir::new().unwrap();
+    let unrelated = TempDir::new().unwrap();
+    let pid_file = project_root.path().join("api.pid");
+    let worker_pid_file = project_root.path().join("worker.pid");
+    fs::write(
+        config_dir.path().join("shop.yaml"),
+        format!(
+            r#"
+version: 1
+project:
+  id: shop
+  path: {}
+processes:
+  api:
+    command: |
+{}
+  worker:
+    command: |
+{}
+"#,
+            project_root.path().display(),
+            long_command(&pid_file),
+            long_command(&worker_pid_file)
+        ),
+    )
+    .unwrap();
+    let supervisor = spawn_supervisor(
+        "shop",
+        config_dir.path(),
+        runtime_dir.path(),
+        unrelated.path(),
+        &[],
+    );
+
+    // Default wait: tolerates the supervisor still booting, then succeeds.
+    let wait = keep(
+        config_dir.path(),
+        runtime_dir.path(),
+        unrelated.path(),
+        &["wait", "shop/api"],
+    );
+    assert!(wait.status.success(), "{}", supervisor.logs());
+    assert!(String::from_utf8_lossy(&wait.stdout).contains("shop/api is running"));
+
+    // Timeout path: a running process never becomes stopped within 1s.
+    let timeout = keep(
+        config_dir.path(),
+        runtime_dir.path(),
+        unrelated.path(),
+        &["wait", "api", "--state", "stopped", "--timeout", "1"],
+    );
+    assert!(!timeout.status.success());
+    let stderr = String::from_utf8_lossy(&timeout.stderr);
+    assert!(
+        stderr.contains("timed out after 1s") && stderr.contains("last seen: running"),
+        "{stderr}"
+    );
+
+    assert!(keep(
+        config_dir.path(),
+        runtime_dir.path(),
+        unrelated.path(),
+        &["stop", "shop/api"],
+    )
+    .status
+    .success());
+    // Waiting for a terminal state works.
+    let stopped = keep(
+        config_dir.path(),
+        runtime_dir.path(),
+        unrelated.path(),
+        &["wait", "api", "-s", "stopped"],
+    );
+    assert!(stopped.status.success(), "{}", supervisor.logs());
+
+    // Fail fast: a stopped process cannot become running by waiting.
+    let unreachable = keep(
+        config_dir.path(),
+        runtime_dir.path(),
+        unrelated.path(),
+        &["wait", "shop/api"],
+    );
+    assert!(!unreachable.status.success());
+    let stderr = String::from_utf8_lossy(&unreachable.stderr);
+    assert!(
+        stderr.contains("is stopped") && stderr.contains("cannot become running"),
+        "{stderr}"
+    );
+
+    // A project that exited entirely counts as stopped.
+    assert!(keep(
+        config_dir.path(),
+        runtime_dir.path(),
+        unrelated.path(),
+        &["stop", "shop"],
+    )
+    .status
+    .success());
+    let gone = keep(
+        config_dir.path(),
+        runtime_dir.path(),
+        unrelated.path(),
+        &["wait", "shop/worker", "-s", "stopped"],
+    );
+    assert!(gone.status.success(), "{}", supervisor.logs());
+}

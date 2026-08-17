@@ -130,6 +130,9 @@ keep restart shop/api         # 重启一个进程
 keep restart api              # 进程名唯一时可省略项目
 keep stop shop/api            # 停止一个进程
 keep stop shop                # 停止整个项目
+keep wait shop/api            # 阻塞等待进程变为 running（默认超时 5 分钟）
+keep wait api -s stopped -t 30  # 等待其他状态，自定义超时秒数
+
 keep stop --all               # 停止 keep 管理的所有项目
 ```
 
