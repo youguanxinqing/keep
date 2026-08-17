@@ -66,6 +66,7 @@ Required scenarios include:
   directory;
 - stop a project and an individual process from an unrelated directory;
 - restart one process and observe a new PID without restarting siblings;
+- wait for a process state and report timeout or unreachable terminal states;
 - display a blocked dependency and readiness diagnostic;
 - forward graceful signals, then force-kill a process that ignores them;
 - prove task completion, Ctrl-C, and `keep stop` reap the process leader and

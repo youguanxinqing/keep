@@ -84,6 +84,7 @@ keep status [project-or-process]
 keep stop [project-or-process...]
 keep stop --all
 keep restart [project-or-process...]
+keep wait <process-target> [--state STATE] [--timeout SECONDS]
 keep quit <project>
 
 keep config list
@@ -102,18 +103,32 @@ current directory. If no running project can be resolved, it prints the active
 projects and requires an explicit target. It must not silently select an
 unrelated project.
 
+`keep wait` accepts a `PROJECT/PROCESS` target or a bare process name that is
+unique among running projects. It polls until the process reaches `running` by
+default; `--state` selects another lifecycle state, and `--timeout` sets the
+maximum wait in seconds. Reaching an incompatible terminal state fails
+immediately instead of waiting for the timeout.
+
 ## Process lifecycle
 
-A process moves through explicit states:
+A process moves through these explicit states:
 
-```text
-pending -> blocked -> starting -> running -> checking -> ready
-                         |           |          |
-                         +--------> failed <----+
+| State | Meaning |
+| --- | --- |
+| `pending` | Queued by the supervisor and not started yet. |
+| `blocked` | Waiting for a dependency. |
+| `starting` | Being launched. |
+| `checking` | Launched, with its readiness probe still running. |
+| `running` | Running; if configured, the readiness probe has passed. |
+| `restarting` | Waiting to start again under the restart policy. |
+| `stopping` | Shutting down after a stop request. |
+| `completed` | A task exited successfully. |
+| `failed` | The process failed and has no restart attempt left. |
+| `stopped` | Stopped until explicitly started again. |
 
-ready -> stopping -> stopped
-ready -> exited -> restarting -> starting
-```
+`completed`, `failed`, and `stopped` are terminal until a later `keep start` or
+`keep restart` command. Services without a readiness probe move from `starting`
+to `running`; services with a probe pass through `checking` first.
 
 The exact state and any blocking or probe failure reason are returned by the
 control API and displayed by `keep status`.
@@ -125,7 +140,8 @@ Startup behavior:
 - YAML declaration order is the stable tie-breaker for simultaneously runnable
   processes and for log presentation.
 - Starting selected processes includes their transitive dependency closure.
-- A dependency with no readiness probe becomes ready after it is spawned.
+- A dependency with no readiness probe satisfies the `ready` condition after it
+  is spawned.
 - A task dependency may gate on `completed_successfully`.
 
 Shutdown behavior:

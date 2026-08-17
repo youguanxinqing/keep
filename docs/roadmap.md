@@ -36,6 +36,7 @@
 - [x] `keep ls` across multiple projects
 - [x] Global project/process target parsing
 - [x] `stop`, `restart`, `status`, and `quit`
+- [x] `wait` for process state transitions
 - [x] Stale and unresponsive registration handling
 - [x] End-to-end tests from directories unrelated to every running project
 

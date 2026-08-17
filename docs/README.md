@@ -1,12 +1,18 @@
+English | [简体中文](README.zh-CN.md)
+
 # keep design documents
 
-This directory is the source of truth for what `keep` is intended to become.
-User-visible behavior should not be added without updating these documents and
-adding an end-to-end test for that behavior.
+These documents describe the current product behavior and design constraints.
+Changes to user-visible behavior must update the relevant document and add an
+end-to-end test.
+
+The README and configuration reference are maintained in English and Simplified
+Chinese. Internal design documents are not translated individually; a language
+note appears beside documents that are not in English.
 
 - [Product specification](product-spec.md)
-- [Configuration reference](configuration.md) — all YAML fields, defaults, and constraints
+- [Configuration reference](configuration.md) ([中文](configuration.zh-CN.md)) — all YAML fields, defaults, and constraints
 - [Architecture](architecture.md)
 - [Testing strategy](testing.md)
 - [Roadmap](roadmap.md)
-- [Process output, logs, and one-off task research](research-process-output-and-tasks.md)
+- [ADR: process output, local logs, and one-off tasks](research-process-output-and-tasks.md) (Chinese)
