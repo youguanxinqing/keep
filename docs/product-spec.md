@@ -103,6 +103,25 @@ current directory. If no running project can be resolved, it prints the active
 projects and requires an explicit target. It must not silently select an
 unrelated project.
 
+## Configuration reload
+
+`keep restart` and `keep start` re-read the configuration file before they launch
+anything, so a process picks up edits made after the supervisor started. Only the
+processes being launched are updated; every other process keeps the configuration
+it was started with until it is itself restarted.
+
+A reload that cannot be applied in place is rejected without touching the running
+project, and the command reports why:
+
+- The file no longer parses or validates.
+- It defines a different set of process names.
+- It renames or relocates the project.
+- It changes `log_directory` for a process being launched, whose log file is
+  opened once for the lifetime of the supervisor.
+
+Those changes require `keep quit <project>` followed by `keep start`. Procfile
+compatibility mode has no reloadable configuration file and is unaffected.
+
 `keep wait` accepts a `PROJECT/PROCESS` target or a bare process name that is
 unique among running projects. It polls until the process reaches `running` by
 default; `--state` selects another lifecycle state, and `--timeout` sets the

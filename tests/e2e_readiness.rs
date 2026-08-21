@@ -410,6 +410,123 @@ processes:
 }
 
 #[test]
+fn restart_reloads_readiness_added_after_the_supervisor_started() {
+    let config_dir = TempDir::new().unwrap();
+    let runtime_dir = TempDir::new_in("/tmp").unwrap();
+    let root = TempDir::new().unwrap();
+    let unrelated = TempDir::new().unwrap();
+    let config = config_dir.path().join("reload.yaml");
+    let write_config = |processes: &str| {
+        fs::write(
+            &config,
+            format!(
+                r#"
+version: 1
+project:
+  id: reload
+  path: {}
+processes:
+{processes}"#,
+                root.path().display()
+            ),
+        )
+        .unwrap();
+    };
+    let service = |readiness: &str| {
+        format!(
+            r#"  service:
+    command: "trap 'exit 0' TERM; while :; do sleep 1; done"
+{readiness}"#
+        )
+    };
+    write_config(&service(""));
+
+    let log = unrelated.path().join("reload.log");
+    let stdout = File::create(&log).unwrap();
+    let stderr = stdout.try_clone().unwrap();
+    let child = Command::new(env!("CARGO_BIN_EXE_keep"))
+        .args(["start", "--config", "reload"])
+        .env("KEEP_CONFIG_DIR", config_dir.path())
+        .env("KEEP_RUNTIME_DIR", runtime_dir.path())
+        .current_dir(unrelated.path())
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr))
+        .spawn()
+        .unwrap();
+    let guard = Guard {
+        child,
+        project: "reload".into(),
+        config: config_dir.path().into(),
+        runtime: runtime_dir.path().into(),
+        cwd: unrelated.path().into(),
+        log,
+    };
+    let state = || {
+        let status = keep(
+            config_dir.path(),
+            runtime_dir.path(),
+            unrelated.path(),
+            &["status", "reload/service"],
+        );
+        String::from_utf8_lossy(&status.stdout)
+            .lines()
+            .find_map(|line| {
+                let fields = line.split_whitespace().collect::<Vec<_>>();
+                (fields.first() == Some(&"reload")).then(|| fields[3].to_string())
+            })
+            .unwrap_or_default()
+    };
+    assert!(
+        wait_for(Duration::from_secs(3), || state() == "running"),
+        "{}",
+        guard.logs()
+    );
+
+    let flag = root.path().join("ready.flag");
+    write_config(&service(
+        r#"    readiness:
+      type: file
+      target: ready.flag
+      interval: 25ms
+      startup_timeout: 10s"#,
+    ));
+    let restart = keep(
+        config_dir.path(),
+        runtime_dir.path(),
+        unrelated.path(),
+        &["restart", "reload/service"],
+    );
+    assert!(restart.status.success(), "{:?}", restart);
+    assert!(
+        wait_for(Duration::from_secs(3), || state() == "checking"),
+        "{}",
+        guard.logs()
+    );
+    File::create(&flag).unwrap();
+    assert!(
+        wait_for(Duration::from_secs(3), || state() == "running"),
+        "{}",
+        guard.logs()
+    );
+
+    write_config(&format!(
+        "{}\n  extra:\n    command: \"echo extra\"\n",
+        service("")
+    ));
+    let rejected = keep(
+        config_dir.path(),
+        runtime_dir.path(),
+        unrelated.path(),
+        &["restart", "reload/service"],
+    );
+    let message = String::from_utf8_lossy(&rejected.stderr);
+    assert!(!rejected.status.success(), "{message}");
+    assert!(message.contains("added extra"), "{message}");
+    assert!(message.contains("keep quit reload"), "{message}");
+    assert_eq!(state(), "running", "{}", guard.logs());
+}
+
+#[test]
 fn command_probe_obeys_the_startup_deadline_and_kills_its_process_group() {
     let config_dir = TempDir::new().unwrap();
     let runtime_dir = TempDir::new_in("/tmp").unwrap();

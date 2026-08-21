@@ -139,11 +139,24 @@ fn procfile_start_registers_processes_for_global_commands() {
         };
         output.status.success() && has_process("web") && has_process("worker")
     }));
-    assert_eq!(
-        fs::read_to_string(project.path().join("legacy-env"))
-            .unwrap()
-            .trim(),
-        "loaded"
+    let legacy_env = project.path().join("legacy-env");
+    assert!(
+        wait_for(Duration::from_secs(5), || {
+            fs::read_to_string(&legacy_env).is_ok_and(|value| value.trim() == "loaded")
+        }),
+        "{:?}",
+        fs::read_to_string(&legacy_env)
+    );
+    let restart = keep(
+        config.path(),
+        runtime.path(),
+        unrelated.path(),
+        &["restart", "legacy/worker"],
+    );
+    assert!(
+        restart.status.success(),
+        "{}",
+        String::from_utf8_lossy(&restart.stderr)
     );
     let stop = keep(
         config.path(),

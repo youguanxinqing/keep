@@ -163,6 +163,12 @@ keep stop --all               # stop every project managed by keep
 Common commands have short aliases: `s` (start), `l` (ls), `ps` (status),
 `st` (stop), `r` (restart), `w` (wait), `q` (quit).
 
+`keep restart` and `keep start` re-read the configuration file first, so edits to
+a command, its environment, or its readiness probe take effect on the next
+restart. Changes that cannot be applied to a live supervisor — a different set of
+process names, a renamed or relocated project, a new `log_directory` — are
+rejected with an explanation and need `keep quit <project>` plus `keep start`.
+
 ## Procfile compatibility mode
 
 Procfiles do not participate in auto-detection and must be run explicitly:

@@ -99,6 +99,9 @@ pub enum SupervisorError {
 
     #[error("process '{0}' does not exist")]
     ProcessNotFound(String),
+
+    #[error("{0}")]
+    ConfigReload(String),
 }
 
 struct Registration {
@@ -726,6 +729,9 @@ impl Supervisor {
                         self.error_response(&format!("process '{name}' does not exist")),
                         false,
                     ),
+                    Err(SupervisorError::ConfigReload(message)) => {
+                        (self.error_response(&message), false)
+                    }
                     Err(error) => return Err(error),
                 }
             }
@@ -746,6 +752,9 @@ impl Supervisor {
                         self.error_response(&format!("process '{name}' does not exist")),
                         false,
                     ),
+                    Err(SupervisorError::ConfigReload(message)) => {
+                        (self.error_response(&message), false)
+                    }
                     Err(error) => return Err(error),
                 }
             }
@@ -797,6 +806,19 @@ impl Supervisor {
 
     fn enable_processes(&mut self, names: &[String]) -> Result<(), SupervisorError> {
         let closure = process_name_closure(&self.config, names)?;
+        let restarted = self
+            .processes
+            .iter()
+            .filter(|process| {
+                closure.contains(&process.name)
+                    && matches!(
+                        process.state,
+                        ProcessState::Stopped | ProcessState::Failed | ProcessState::Completed
+                    )
+            })
+            .map(|process| process.name.clone())
+            .collect::<Vec<_>>();
+        self.reload_config(&restarted)?;
         for process in &mut self.processes {
             if closure.contains(&process.name) {
                 process.enabled = true;
@@ -849,6 +871,7 @@ impl Supervisor {
             self.validate_process_names(names)?;
             names.to_vec()
         };
+        self.reload_config(&targets)?;
         let target_set = targets.iter().cloned().collect::<BTreeSet<_>>();
         let order = self.started_order.iter().rev().cloned().collect::<Vec<_>>();
         for name in order {
@@ -916,6 +939,90 @@ impl Supervisor {
         (signal, timeout)
     }
 
+    /// Re-read the configuration file so restarted processes pick up edits made
+    /// since the supervisor started. Only `names` are updated; every other
+    /// process keeps the configuration it was started with until it restarts.
+    /// Nothing is applied unless the whole reload is applicable, so a broken
+    /// file leaves the running project untouched.
+    fn reload_config(&mut self, names: &[String]) -> Result<(), SupervisorError> {
+        // Procfile compatibility mode synthesizes its configuration; its source
+        // is the Procfile itself, which the YAML loader cannot read.
+        let reloadable = self
+            .config
+            .source
+            .extension()
+            .is_some_and(|extension| matches!(extension.to_str(), Some("yaml" | "yml")));
+        if !reloadable {
+            return Ok(());
+        }
+        let reloaded = LoadedConfig::load(&self.config.source)
+            .map_err(|error| SupervisorError::ConfigReload(error.to_string()))?;
+        // The supervisor's root and registration are fixed at startup, so a file
+        // that renamed or relocated the project cannot be applied in place.
+        let relocated = reloaded.project.path.is_some()
+            && project_root(&reloaded).is_ok_and(|root| canonical(&root) != canonical(&self.root));
+        if reloaded.project.id != self.config.project.id || relocated {
+            return Err(SupervisorError::ConfigReload(format!(
+                "{} now describes a different project; {}",
+                self.config.source.display(),
+                self.restart_supervisor_hint(),
+            )));
+        }
+        let managed = self
+            .processes
+            .iter()
+            .map(|process| process.name.clone())
+            .collect::<BTreeSet<_>>();
+        let configured = reloaded.processes.keys().cloned().collect::<BTreeSet<_>>();
+        if managed != configured {
+            return Err(SupervisorError::ConfigReload(format!(
+                "{} now defines a different process set ({}); {}",
+                self.config.source.display(),
+                describe_process_set_change(&managed, &configured),
+                self.restart_supervisor_hint(),
+            )));
+        }
+
+        let mut updates = Vec::with_capacity(names.len());
+        for name in names {
+            let index = self.process_index(name)?;
+            let updated = reloaded.processes[name].clone();
+            if updated.log_directory != self.processes[index].config.log_directory {
+                return Err(SupervisorError::ConfigReload(format!(
+                    "process '{name}' changed log_directory; {}",
+                    self.restart_supervisor_hint(),
+                )));
+            }
+            let environment = load_environment(
+                &self.root,
+                &reloaded.env_files,
+                &updated.env_files,
+                &updated.env,
+            )
+            .map_err(|error| SupervisorError::ConfigReload(error.to_string()))?;
+            updates.push((index, updated, environment));
+        }
+
+        for (index, updated, environment) in updates {
+            let process = &mut self.processes[index];
+            process.color = updated
+                .color
+                .map(|color| color.xterm_code())
+                .unwrap_or(process.color);
+            process.environment = environment;
+            process.config = updated;
+        }
+        self.config = reloaded;
+        Ok(())
+    }
+
+    fn restart_supervisor_hint(&self) -> String {
+        format!(
+            "apply it with 'keep quit {}' followed by 'keep start'",
+            self.config.project.id
+        )
+    }
+
     fn validate_process_names(&self, names: &[String]) -> Result<(), SupervisorError> {
         for name in names {
             if !self.processes.iter().any(|process| process.name == *name) {
@@ -945,6 +1052,31 @@ impl Supervisor {
                     ProcessState::Completed | ProcessState::Stopped
                 )
         })
+    }
+}
+
+fn canonical(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn describe_process_set_change(
+    managed: &BTreeSet<String>,
+    configured: &BTreeSet<String>,
+) -> String {
+    let list = |names: Vec<&String>| {
+        names
+            .iter()
+            .map(|name| name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let added = configured.difference(managed).collect::<Vec<_>>();
+    let removed = managed.difference(configured).collect::<Vec<_>>();
+    match (added.is_empty(), removed.is_empty()) {
+        (false, false) => format!("added {}; removed {}", list(added), list(removed)),
+        (false, true) => format!("added {}", list(added)),
+        (true, false) => format!("removed {}", list(removed)),
+        (true, true) => "unchanged names in a different order".into(),
     }
 }
 

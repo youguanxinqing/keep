@@ -151,6 +151,11 @@ keep stop --all               # 停止 keep 管理的所有项目
 常用命令有短别名：`s`（start）、`l`（ls）、`ps`（status）、`st`（stop）、
 `r`（restart）、`w`（wait）、`q`（quit）。
 
+`keep restart` 和 `keep start` 会先重新读取配置文件，因此修改命令、环境变量或
+就绪检测后，下一次重启即生效。无法在运行中的 supervisor 上生效的改动——进程名
+集合变化、项目改名或换根目录、`log_directory` 变化——会被拒绝并说明原因，需要
+`keep quit <project>` 后再 `keep start`。
+
 ## Procfile 兼容模式
 
 Procfile 不参与自动匹配，需要显式运行：
